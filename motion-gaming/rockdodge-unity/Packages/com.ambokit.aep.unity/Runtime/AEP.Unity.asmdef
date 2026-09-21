@@ -1,0 +1,10 @@
+﻿{
+    "name":  "AmboKit.AEP.Unity",
+    "rootNamespace":  "AmboKit.AEP",
+    "references":  [
+                       "UnityEngine.UI",
+                       "AEP.Core",
+                       "AEP.Unity.Adapter"
+                   ],
+    "autoReferenced":  true
+}

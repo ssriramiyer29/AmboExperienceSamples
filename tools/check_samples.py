@@ -52,7 +52,22 @@ RENDERER_IMPORT_CSHARP = re.compile(r"^\s*using\s+UnityEngine", re.MULTILINE)
 
 # A sample must not be able to reach AEP source. These are how each renderer would do it.
 GRADLE_SOURCE_DEP = re.compile(r'project\(":aep[-.]')
-UNITY_SOURCE_PACKAGE = re.compile(r'"(com\.ambokit\.(?:aep|unity-host)[^"]*)"\s*:\s*"file:')
+
+# The AEP platform's Unity package IDs, listed exactly rather than matched by prefix. A prefix
+# pattern flagged RockDodge's own package - com.ambokit.aep.unity - as platform source, which it
+# is not. A sample is allowed to have its own package under the ambokit namespace; what it may
+# not do is pull in the platform's.
+AEP_PLATFORM_PACKAGES = {
+    "com.ambokit.aep",
+    "com.ambokit.unity-host",
+    "com.ambokit.aep.unity-adapter",
+    "com.ambokit.aep.binary-builder",
+}
+
+# Working files that must never reach a public reference sample. Not pedantry: these appear
+# whenever someone renames or migrates in place, they are invisible in an editor, and a reader
+# cannot tell a stale .pre-canonical.bak from the file that is actually compiled.
+DEBRIS = ("*.bak", "*.orig", "*.rej", "*.csproj", "*.sln", "*.slnx", "*.user")
 
 failures: list[str] = []
 checks = 0
@@ -146,11 +161,29 @@ def check_unity(sample: pathlib.Path, name: str, version: str) -> None:
     if not manifest.exists():
         fail(name, "no Packages/manifest.json")
         return
-    source_packages = UNITY_SOURCE_PACKAGE.findall(manifest.read_text())
+    try:
+        dependencies = json.loads(manifest.read_text()).get("dependencies") or {}
+    except json.JSONDecodeError as exc:
+        fail(name, f"Packages/manifest.json is not valid JSON ({exc})")
+        return
+    source_packages = sorted(AEP_PLATFORM_PACKAGES & set(dependencies))
     if source_packages:
         fail(name, f"Packages/manifest.json pulls AEP source: {', '.join(source_packages)}")
     else:
         ok(name, "Packages/manifest.json pulls no AEP source")
+
+
+def check_no_debris(sample: pathlib.Path, name: str) -> None:
+    found = sorted(
+        str(path.relative_to(sample))
+        for pattern in DEBRIS
+        for path in sample.rglob(pattern)
+    )
+    if found:
+        shown = ", ".join(found[:6]) + (f" and {len(found) - 6} more" if len(found) > 6 else "")
+        fail(name, f"working files that should not be published: {shown}")
+    else:
+        ok(name, "carries no backup or IDE files")
 
 
 def check_no_platform_source(sample: pathlib.Path, name: str) -> None:
@@ -238,6 +271,7 @@ def main() -> int:
         else:
             fail(name, f"unknown renderer {renderer!r} - this check has no rules for it")
 
+        check_no_debris(sample, name)
         check_experience_rules(sample, name, declaration["experienceRules"])
         print()
 

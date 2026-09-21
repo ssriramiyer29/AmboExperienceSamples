@@ -1,0 +1,7 @@
+{
+  "name": "AmboKit.AEP.Unity.Editor",
+  "rootNamespace": "AmboKit.AEP.Editor",
+  "references": ["AmboKit.AEP.Unity", "UnityEngine.UI"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

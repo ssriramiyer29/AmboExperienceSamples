@@ -5,6 +5,21 @@ local.properties
 *.apk
 *.aab
 
+# Unity: regenerated on open, and enormous. A Unity sample is a project, not a build.
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uilds?/
+[Ll]ogs/
+UserSettings/
+MemoryCaptures/
+.utmp/
+*.csproj
+*.sln
+*.slnx
+*.unityproj
+sysinfo.txt
+
 # IDE
 .idea/
 *.iml

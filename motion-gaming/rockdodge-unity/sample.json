@@ -1,0 +1,8 @@
+{
+  "name": "rockdodge-unity",
+  "renderer": "unity",
+  "aepVersion": "0.5.0",
+  "capabilities": ["camera.pose@1", "livevideo.person@1"],
+  "experienceRules": "Packages/com.ambokit.aep.unity/Runtime/Core",
+  "description": "The Unity build of RockDodge. Same game and same AEP version as the Android TV sample, different renderer."
+}

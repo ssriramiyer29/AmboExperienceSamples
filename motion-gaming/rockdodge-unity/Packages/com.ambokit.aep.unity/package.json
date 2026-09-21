@@ -1,0 +1,17 @@
+﻿{
+    "name":  "com.ambokit.aep.unity",
+    "version":  "0.3.4",
+    "displayName":  "AEP Unity Rock Dodge Reference",
+    "description":  "Rock Dodge reference experience for AEP Unity. Runtime volcanic background is bundled in-package; no sample import required.",
+    "unity":  "6000.0",
+    "dependencies":  {
+                         "com.unity.ugui":  "2.0.0"
+                     },
+    "samples":  [
+                    {
+                        "displayName":  "Rock Dodge",
+                        "description":  "Unity renderer for the locked Rock Dodge core.",
+                        "path":  "Samples~/RockDodge"
+                    }
+                ]
+}
