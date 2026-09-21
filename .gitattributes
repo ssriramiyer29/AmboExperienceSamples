@@ -1,0 +1,20 @@
+# Line endings are a correctness issue in this repository, not a style one.
+#
+# gradlew is a shell script executed on Linux and macOS. If Git hands a contributor a CRLF
+# copy and it is committed back that way, the script stops working on every non-Windows
+# machine - with an error that blames the shell rather than the line endings. A public samples
+# repository is cloned on all three platforms by definition.
+* text=auto eol=lf
+
+# The Windows launcher is the one file that genuinely wants CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Vendored AEP binaries and assets: never touched, never normalised, never diffed as text.
+*.jar binary
+*.aar binary
+*.apk binary
+*.aab binary
+*.jpg binary
+*.jpeg binary
+*.png binary
