@@ -22,6 +22,11 @@ motion-gaming/
 **Domains appear when a sample fills them.** There is no scaffold of empty folders waiting
 to be populated — an empty domain advertises a sample that does not exist.
 
+Every sample declares itself in a `sample.json` at its root — renderer, AEP version,
+capabilities, and where its renderer-free rules live. Discovery and CI key on that file rather
+than inferring anything from build systems, so a sample cannot be checked in one renderer's
+shape and silently skipped in another's. See [docs/ADDING_A_SAMPLE.md](docs/ADDING_A_SAMPLE.md).
+
 ## Each sample carries its own binaries
 
 A sample vendors the AEP binaries it was built against, in its own `libs/`, rather than every
@@ -30,8 +35,9 @@ keeping those pins visible turns this repository into a **living compatibility m
 version pairs that version negotiation can be tested against, rather than a snapshot that
 claims everything works with everything.
 
-Each sample's `gradle.properties` declares its `aep.version`, and its `libs/README.md` records
-what else that version needs.
+Each sample's `sample.json` declares its `aepVersion`, and — for Android — its `libs/README.md`
+records what else that version needs, since a vendored `.aar` brings no transitive dependencies
+with it.
 
 ## Samples
 

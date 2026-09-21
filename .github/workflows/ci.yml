@@ -31,13 +31,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Vendored binaries present and matching each sample's declared AEP version; no
-      # dependency on AEP platform source; experience rules free of renderer imports.
+      # Vendored binaries present and matching each sample's declared AEP version; no dependency
+      # on AEP platform source; experience rules free of renderer imports. Every sample, whatever
+      # its renderer - samples declare themselves in sample.json rather than being inferred from
+      # build files, so a Unity sample cannot pass through unnoticed.
       - name: Check every sample
         run: python3 tools/check_samples.py
 
   build:
-    name: Build every sample from its own binaries
+    name: Build every buildable sample from its own binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,26 +57,44 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # Samples are discovered rather than listed, matching tools/check_samples.py. A list here
-      # would quietly stop covering the sample someone adds next.
-      #
-      # Each sample is a standalone Gradle build with its own wrapper, so they are built one at
-      # a time rather than as one multi-project build. That separation is the point: a sample
-      # that needed this repository's cooperation to build would not be proving much.
-      - name: Build
+      # Each sample is a standalone build with its own wrapper, so they are built one at a time
+      # rather than as one multi-project build. That separation is the point: a sample that
+      # needed this repository's cooperation to build would not be proving much.
+      - name: Build Android samples
         run: |
           set -euo pipefail
-          shopt -s nullglob
           built=0
-          for settings in */*/settings.gradle.kts; do
-            sample="$(dirname "$settings")"
+          while read -r sample; do
+            [ -n "$sample" ] || continue
             echo "::group::$sample"
             ( cd "$sample" && chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon --stacktrace )
             echo "::endgroup::"
             built=$((built + 1))
-          done
-          if [ "$built" -eq 0 ]; then
-            echo "::error::no samples found to build - discovery is broken"
+          done < <(python3 tools/list_samples.py --renderer android-tv)
+          echo "Built $built Android sample(s) from vendored binaries."
+
+      # Unity samples are structurally checked in the other job but cannot be compiled here:
+      # Unity needs an editor and a licence this runner does not have. Stated rather than
+      # skipped, so the gap stays visible instead of looking like coverage.
+      - name: Report Unity samples as unbuilt
+        run: |
+          set -euo pipefail
+          unity="$(python3 tools/list_samples.py --renderer unity)"
+          if [ -z "$unity" ]; then
+            echo "No Unity samples."
+          else
+            echo "$unity" | while read -r sample; do
+              echo "::warning title=Unity sample not built::$sample is checked but not compiled - no Unity licence on this runner"
+            done
+          fi
+
+      # A repository with no buildable samples is a broken discovery, not a quiet success.
+      - name: Fail if nothing was discovered
+        run: |
+          set -euo pipefail
+          total="$(python3 tools/list_samples.py | wc -l)"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::no samples found - discovery is broken"
             exit 1
           fi
-          echo "Built $built sample(s) from vendored binaries."
+          echo "$total sample(s) discovered."
