@@ -1,0 +1,18 @@
+# Build output
+build/
+.gradle/
+local.properties
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vendored AEP binaries are deliberately NOT ignored. A sample without its binaries cannot be
+# built from artifacts alone, which is the one thing this repository exists to demonstrate.
