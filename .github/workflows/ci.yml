@@ -1,0 +1,80 @@
+name: CI
+
+# This repository makes one promise: every sample builds from published AEP binaries alone.
+# Nothing checked that promise until this workflow existed - and an unchecked promise about a
+# build is one that stops being true at the first convenient shortcut.
+#
+# It is also the only place a bad AEP release gets caught by something other than a person.
+# If 0.5.1 ships a broken artifact, a sample pinned to it fails here rather than months later
+# on someone's TV.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  # A sample can break without anyone touching this repository - a toolchain moves underneath
+  # it, or a vendored binary turns out not to be self-sufficient after all. Weekly is often
+  # enough to notice, rare enough to ignore.
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  check:
+    name: Sample invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Vendored binaries present and matching each sample's declared AEP version; no
+      # dependency on AEP platform source; experience rules free of renderer imports.
+      - name: Check every sample
+        run: python3 tools/check_samples.py
+
+  build:
+    name: Build every sample from its own binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # packages: '' skips sdkmanager installs - its default installs 'tools', which current
+      # cmdline-tools no longer ship. The runner image already provides the SDK.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Samples are discovered rather than listed, matching tools/check_samples.py. A list here
+      # would quietly stop covering the sample someone adds next.
+      #
+      # Each sample is a standalone Gradle build with its own wrapper, so they are built one at
+      # a time rather than as one multi-project build. That separation is the point: a sample
+      # that needed this repository's cooperation to build would not be proving much.
+      - name: Build
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          built=0
+          for settings in */*/settings.gradle.kts; do
+            sample="$(dirname "$settings")"
+            echo "::group::$sample"
+            ( cd "$sample" && chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon --stacktrace )
+            echo "::endgroup::"
+            built=$((built + 1))
+          done
+          if [ "$built" -eq 0 ]; then
+            echo "::error::no samples found to build - discovery is broken"
+            exit 1
+          fi
+          echo "Built $built sample(s) from vendored binaries."
