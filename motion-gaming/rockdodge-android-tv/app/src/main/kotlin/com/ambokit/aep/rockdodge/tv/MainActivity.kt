@@ -70,6 +70,25 @@ class MainActivity : Activity(), AepHostListener, PlayerActionListener {
         ).also {
             it.actionListener = this
             it.hostEventListener = this
+            // The supported way to learn that the phone dropped. This used to be read off the raw
+            // host events below, which worked and is exactly why nobody noticed AepSession had no
+            // way to report it - a sample reaching through the escape hatch hides the gap it is
+            // working around. AEP reports the link's health and leaves the response to us.
+            it.connectionChanged += { connection ->
+                runOnUiThread {
+                    gameView.connectionState = connection
+                    gameView.statusText = when (connection) {
+                        AepConnectionState.CONNECTING -> "Creating Ambo session…"
+                        AepConnectionState.CONNECTED ->
+                            if (it.interpreter == null) "Waiting for player / calibrating…" else "Ready"
+                        AepConnectionState.RECONNECTING -> "Reconnecting…"
+                        AepConnectionState.REJOIN_REQUIRED -> "Creating a new AmboJoin…"
+                        AepConnectionState.CLOSED ->
+                            if (it.state == AepState.FAULTED) "Ambo session failed" else "Ambo session closed"
+                    }
+                    gameView.invalidate()
+                }
+            }
             it.motionListener = PlayerMotionListener { motion ->
                 // Conflate motion exactly like live video: the game consumes only the newest
                 // player state on the next TV frame. Never replay queued/stale movement.
@@ -207,16 +226,6 @@ class MainActivity : Activity(), AepHostListener, PlayerActionListener {
                 }
                 is AepHostEvent.ParticipantLeft -> {
                     gameView.statusText = "Companion disconnected"
-                }
-                is AepHostEvent.SessionChanged -> {
-                    gameView.statusText = when (event.state) {
-                        SessionState.STARTING -> "Creating Ambo session…"
-                        SessionState.READY -> if (session.interpreter == null) "Waiting for player / calibrating…" else "Ready"
-                        SessionState.RECONNECTING -> "Reconnecting…"
-                        SessionState.REJOIN_REQUIRED -> "Creating a new AmboJoin…"
-                        SessionState.FAILED -> "Ambo session failed"
-                        else -> gameView.statusText
-                    }
                 }
                 is AepHostEvent.Error -> {
                     gameView.statusText = "${event.error.code}: ${event.error.message}"

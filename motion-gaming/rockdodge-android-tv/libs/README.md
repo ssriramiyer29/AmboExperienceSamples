@@ -1,13 +1,13 @@
 # Vendored AEP binaries
 
-This sample builds against **AEP 0.6.0**, declared as `aep.version` in `../gradle.properties`.
+This sample builds against **AEP 0.7.0**, declared as `aep.version` in `../gradle.properties`.
 These three files belong here, committed to the repository:
 
 | File | Component | Coordinate (internal use only) |
 |---|---|---|
-| `AEP.Core-0.6.0.jar` | Core | `com.ambokit.aep:aep-core` |
-| `AEP.HostSDK-0.6.0.aar` | Host SDK | `com.ambokit.aep:aep-host-sdk` |
-| `AEP.AndroidTV.Adapter-0.6.0.aar` | Android TV adapter | `com.ambokit.aep:aep-androidtv-adapter` |
+| `AEP.Core-0.7.0.jar` | Core | `com.ambokit.aep:aep-core` |
+| `AEP.HostSDK-0.7.0.aar` | Host SDK | `com.ambokit.aep:aep-host-sdk` |
+| `AEP.AndroidTV.Adapter-0.7.0.aar` | Android TV adapter | `com.ambokit.aep:aep-androidtv-adapter` |
 
 Core ships as a **JAR**, not an AAR: nothing in it touches Android, and an AAR would drag the
 Android toolchain into an artifact that does not need it.
@@ -15,14 +15,14 @@ Android toolchain into an artifact that does not need it.
 Download them from the AEP release and drop them in this folder:
 
 ```bash
-gh release download v0.6.0 --repo ssriramiyer29/amboexperienceplatform --dir .
+gh release download v0.7.0 --repo ssriramiyer29/amboexperienceplatform --dir .
 ```
 
 The Maven coordinates above are listed for reference. They resolve from GitHub Packages, which
 is private — this repository is public, so samples vendor files instead of requiring every
 reader to hold a token.
 
-## What else 0.6.0 needs
+## What else 0.7.0 needs
 
 A vendored `.aar` referenced as a file dependency carries **no POM**, so nothing comes with it
 transitively. Whatever the Host SDK depends on has to be declared by hand in `../app/build.gradle.kts`:

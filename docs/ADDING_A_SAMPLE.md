@@ -14,7 +14,7 @@ project and carries no `sample.json` now fails rather than being ignored.
 {
   "name": "rockdodge-unity",
   "renderer": "unity",
-  "aepVersion": "0.6.0",
+  "aepVersion": "0.7.0",
   "capabilities": ["camera.pose@1", "livevideo.person@1"],
   "experienceRules": "Assets/RockDodge/Runtime/Core",
   "description": "The Unity build of RockDodge. Same game, same AEP, different renderer."
@@ -53,7 +53,7 @@ so on purpose — the alternative is a check that finds nothing to look at and r
 ```
 
 A vendored `.aar` carries **no POM**, so nothing arrives transitively with it. Whatever the Host
-SDK depends on must be declared by hand in the app's `build.gradle.kts` — for 0.6.0 that is
+SDK depends on must be declared by hand in the app's `build.gradle.kts` — for 0.7.0 that is
 `com.squareup.okhttp3:okhttp:4.12.0`. Leaving it out produces a build that succeeds and an app
 that dies with `NoClassDefFoundError` the first time the host opens a socket. Record it in
 `libs/README.md` and re-check it on every version bump.
