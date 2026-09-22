@@ -181,19 +181,59 @@ class HandInterpreterTest {
     }
 
     @Test
-    fun `the reachable part of the frame covers the whole canvas`() {
-        val reader = HandInterpreter(activeMinY = 0.08f, activeMaxY = 0.78f)
-        // Reaching the bottom of the canvas used to mean putting a hand at the bottom of what the
-        // camera can see, which is somewhere around the knees.
-        val low = reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.78)), aspect, 0L)
-        assertEquals(aspect, low.right!!.y, 0.01f, "the bottom of the reach must be the bottom of the canvas")
+    fun `the canvas stretches to the reach that was actually seen`() {
+        val reader = HandInterpreter()
+        // A hand covering the range a real one covered on a television, a few times over.
+        repeat(40) {
+            reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.06)), aspect, 0L)
+            reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.60)), aspect, 0L)
+        }
+        // Only the vertical was exercised, and only the vertical needs to be known for this.
+        assertTrue(reader.reach.isLearnedY)
 
-        val high = reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.08)), aspect, 0L)
-        assertEquals(0f, high.right!!.y, 0.01f)
+        val low = reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.60)), aspect, 0L)
+        assertEquals(aspect, low.right!!.y, 0.03f, "the lowest the hand went must be the canvas bottom")
+        val high = reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.06)), aspect, 0L)
+        assertEquals(0f, high.right!!.y, 0.03f)
+    }
 
-        // And past the edge it clamps rather than running off the screen.
-        val lower = reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.95)), aspect, 0L)
-        assertEquals(aspect, lower.right!!.y, 0.01f)
+    @Test
+    fun `the reach does not move while a stroke is being drawn`() {
+        val reader = HandInterpreter()
+        repeat(40) {
+            reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.20)), aspect, 0L)
+            reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.50)), aspect, 0L)
+        }
+        val span = reader.reach.spanY
+
+        // Mid-stroke, the hand goes somewhere new. Growing the envelope now would rescale the
+        // canvas under the line being drawn and slide it sideways.
+        repeat(20) {
+            reader.read(frame(hand(AepHandHandedness.RIGHT, 0.5, y = 0.90)), aspect, 0L, learningReach = false)
+        }
+        assertEquals(span, reader.reach.spanY, 1e-4f)
+    }
+
+    @Test
+    fun `a hand that can be seen pinching keeps the pen from one that cannot`() {
+        val reader = HandInterpreter()
+        // Both hands pinching, both visible.
+        reader.read(frame(
+            hand(AepHandHandedness.LEFT, 0.2, pinch = 0.9),
+            hand(AepHandHandedness.RIGHT, 0.8, pinch = 0.9)
+        ), aspect, 0L)
+        assertNull(reader.penHand(reader.read(frame(
+            hand(AepHandHandedness.LEFT, 0.2, pinch = 0.9),
+            hand(AepHandHandedness.RIGHT, 0.8, pinch = 0.9)
+        ), aspect, 10L)), "two hands pinching is a zoom, not a pen")
+
+        // Now the right hand vanishes while still latched. Its bridged latch used to count as a
+        // second pinch, so "exactly one hand is pinching" went false and the pen was taken away
+        // from the left hand that was visibly drawing with it.
+        val blink = reader.read(frame(hand(AepHandHandedness.LEFT, 0.2, pinch = 0.9)), aspect, 100L)
+        assertTrue(reader.isPenHeld, "the visible pinching hand still has the pen")
+        assertNotNull(reader.penHand(blink))
+        assertEquals(AepHandHandedness.LEFT, reader.penHand(blink)!!.handedness)
     }
 
     @Test

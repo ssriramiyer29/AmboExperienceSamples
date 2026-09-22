@@ -90,11 +90,8 @@ class HandInterpreter(
      */
     private val dropoutGraceMs: Long = 300L,
     private val minimumConfidence: Float = 0.4f,
-    /** The part of the camera frame that maps onto the canvas. See [remap]. */
-    private val activeMinX: Float = 0.10f,
-    private val activeMaxX: Float = 0.90f,
-    private val activeMinY: Float = 0.08f,
-    private val activeMaxY: Float = 0.78f
+    /** Learns which part of the camera frame this person's arms actually cover. */
+    val reach: ReachEnvelope = ReachEnvelope()
 ) {
     /** The last raw camera-frame position, before mirroring and remapping, for diagnostics. */
     var lastRawX: Float? = null
@@ -143,11 +140,37 @@ class HandInterpreter(
      * was the mistake: the hand that is pinching is the hand that is drawing, and it needs no
      * setting up and cannot be got wrong.
      */
-    fun penHand(input: HandInput): HandPointer? = when {
-        input.unplaced != null -> if (lonePinch.on) input.unplaced else null
-        leftPinch.on && !rightPinch.on -> input.left
-        rightPinch.on && !leftPinch.on -> input.right
-        else -> null
+    fun penHand(input: HandInput): HandPointer? {
+        if (input.unplaced != null) return if (lonePinch.on) input.unplaced else null
+        return penSide()?.let { input.hand(it) }
+    }
+
+    /** True when that hand is pinching and is actually on screen, rather than being bridged. */
+    fun isSeenPinching(which: AepHandHandedness?): Boolean = when (which) {
+        AepHandHandedness.LEFT -> leftPinch.on && !leftPinch.bridging
+        AepHandHandedness.RIGHT -> rightPinch.on && !rightPinch.bridging
+        else -> false
+    }
+
+    /**
+     * Which hand has the pen.
+     *
+     * A hand that can be seen pinching beats one that is merely being held across a dropout.
+     * Without that, a vanished hand's bridged latch counted as a second pinch, "exactly one hand
+     * is pinching" became false, and the pen was taken away from the hand that was visibly
+     * drawing with it - which happened six times in a two minute session and read as the pointer
+     * disappearing.
+     */
+    private fun penSide(): AepHandHandedness? {
+        val leftSeen = leftPinch.on && !leftPinch.bridging
+        val rightSeen = rightPinch.on && !rightPinch.bridging
+        if (leftSeen != rightSeen) return if (leftSeen) AepHandHandedness.LEFT else AepHandHandedness.RIGHT
+        // Both seen is a zoom, not a pen. Neither seen may still be one hand being bridged.
+        if (leftSeen) return null
+        if (leftPinch.on != rightPinch.on) {
+            return if (leftPinch.on) AepHandHandedness.LEFT else AepHandHandedness.RIGHT
+        }
+        return null
     }
 
     /**
@@ -157,12 +180,23 @@ class HandInterpreter(
      * nowhere to draw. The caller holds the stroke open and adds no points, rather than ending it.
      */
     val isPenHeld: Boolean
-        get() = lonePinch.on || (leftPinch.on != rightPinch.on)
+        get() = lonePinch.on || penSide() != null
 
-    fun read(frame: AepHandFrame?, aspect: Float, nowMs: Long): HandInput {
+    /**
+     * @param learningReach whether the envelope may grow from what is seen this frame. False
+     *   while a stroke is in progress: a mapping that moved mid-stroke would slide the line
+     *   sideways under the hand drawing it.
+     */
+    fun read(frame: AepHandFrame?, aspect: Float, nowMs: Long, learningReach: Boolean = true): HandInput {
         // A lost frame is not a reset. The provider drops the hand for a frame or two several
         // times a minute, and tearing everything down on each blink is what turned a handful of
         // drawn marks into thirty-nine strokes.
+        if (learningReach && frame != null && frame.trackingState != AepTrackingState.LOST) {
+            // Fed from the raw landmarks, before they are mapped, or the envelope would be
+            // learning from its own output.
+            for (hand in frame.hands) rawMidpoint(hand)?.let { (x, y) -> reach.observe(mirroredX(x), y) }
+        }
+
         val hands = if (frame == null || frame.trackingState == AepTrackingState.LOST) emptyList()
         else resolveSides(frame.hands.mapNotNull { toPointer(it, aspect) })
 
@@ -253,42 +287,33 @@ class HandInterpreter(
         }
     }
 
-    private fun toPointer(hand: AepHand, aspect: Float): HandPointer? {
-        if (hand.confidence < minimumConfidence) return null
-        val thumb = landmark(hand, "thumb_tip")
-        val index = landmark(hand, "index_finger_tip")
-        if (thumb == null || index == null) return null
+    private fun mirroredX(rawX: Float): Float = if (mirrorX) 1f - rawX else rawX
 
-        val rawX = ((thumb.first + index.first) * 0.5f)
-        val rawY = ((thumb.second + index.second) * 0.5f)
+    /** The pen tip in camera coordinates, or null when this hand cannot be read. */
+    private fun rawMidpoint(hand: AepHand): Pair<Float, Float>? {
+        if (hand.confidence < minimumConfidence) return null
+        val thumb = landmark(hand, "thumb_tip") ?: return null
+        val index = landmark(hand, "index_finger_tip") ?: return null
+        return ((thumb.first + index.first) * 0.5f) to ((thumb.second + index.second) * 0.5f)
+    }
+
+    private fun toPointer(hand: AepHand, aspect: Float): HandPointer? {
+        val (rawX, rawY) = rawMidpoint(hand) ?: return null
         lastRawX = rawX
         lastRawY = rawY
 
         val mirrored = if (mirrorX) 1f - rawX else rawX
         return HandPointer(
             handedness = hand.handedness,
-            x = remap(mirrored, activeMinX, activeMaxX),
+            x = reach.mapX(mirrored),
             // The provider normalises y over the camera frame; the canvas is 0..aspect.
-            y = remap(rawY, activeMinY, activeMaxY) * aspect,
+            y = reach.mapY(rawY) * aspect,
             pinch = (hand.pinchStrength ?: 0.0).toFloat(),
             confidence = hand.confidence.toFloat()
         )
     }
 
-    /**
-     * Stretch the comfortable part of the camera frame across the whole canvas.
-     *
-     * Without this, reaching the bottom of the screen means putting your hand at the bottom of
-     * what the camera can see - which is somewhere around your knees, and was reported as the
-     * bottom of the canvas and the lower half of the tool strip being hard to get to. Mapping a
-     * sub-rectangle onto the full canvas means the corners are reachable from a position someone
-     * can hold.
-     *
-     * The bounds are a first cut and the diagnostics print the raw values, so they can be set
-     * from where hands actually go rather than from where it seems like they would.
-     */
-    private fun remap(value: Float, min: Float, max: Float): Float =
-        ((value - min) / (max - min)).coerceIn(0f, 1f)
+
 
     private fun landmark(hand: AepHand, name: String): Pair<Float, Float>? {
         // Landmarks are positional and may carry nulls where a joint was not seen, which is why

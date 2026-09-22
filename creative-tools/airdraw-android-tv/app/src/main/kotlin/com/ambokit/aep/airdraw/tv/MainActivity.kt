@@ -180,7 +180,9 @@ class MainActivity : Activity() {
         val frame = latestHandFrame.getAndSet(null) ?: return
         val aspect = engine.viewport.aspect
         val now = System.currentTimeMillis()
-        val input = hands.read(frame, aspect, now)
+        // The envelope only grows while the pen is up, or the mapping would shift under
+        // the line being drawn.
+        val input = hands.read(frame, aspect, now, learningReach = !drawing)
         view.tracking = input.tracked
         view.cursors = cursorsFor(input)
         try {
@@ -196,8 +198,10 @@ class MainActivity : Activity() {
     private fun route(input: HandInput, aspect: Float, now: Long) {
         val left = input.left
         val right = input.right
+        // Both hands actually seen pinching. A bridged latch is not a second hand for zooming:
+        // there is nothing on screen to measure a separation against.
         val bothPinching = left != null && right != null &&
-            hands.isPinching(AepHandHandedness.LEFT) && hands.isPinching(AepHandHandedness.RIGHT)
+            hands.isSeenPinching(AepHandHandedness.LEFT) && hands.isSeenPinching(AepHandHandedness.RIGHT)
 
         // Two pinching hands is a zoom, and never a mark. Checked before anything else, so
         // bringing the second hand in does not leave a stray line behind it.
@@ -292,6 +296,7 @@ class MainActivity : Activity() {
                 " pinchR=${hands.isPinching(AepHandHandedness.RIGHT)}" +
                 " bridging=${hands.isBridging}" +
                 " raw=${format(hands.lastRawX)},${format(hands.lastRawY)}" +
+                " reach=[${hands.reach}]" +
                 " drawing=$drawing zoom=${zoom.isActive} scale=${"%.2f".format(engine.viewport.scale)}" +
                 " strokes=${engine.drawing.all.size}"
         )

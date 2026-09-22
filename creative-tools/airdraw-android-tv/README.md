@@ -129,10 +129,17 @@ now survives 300 ms of absence, and a hand that reappears more than a tenth of a
 starts a new stroke rather than ruling a line across the drawing. The dropouts themselves are the
 Companion's to fix.
 
-**The active area is a first cut.** The comfortable part of the camera frame is stretched across
-the canvas, because reaching the bottom of the screen otherwise meant putting a hand at the bottom
-of what the camera sees, somewhere around the knees. The bounds are guesses; the diagnostics print
-raw camera positions so they can be set from where hands actually go.
+**The canvas learns your reach instead of assuming it.** Fixed bounds were tried and a logged
+session showed why they cannot work: the player's hand never went below 0.60 in the camera frame
+while the canvas bottom was pinned at 0.78, so the lowest quarter of the drawing surface was past
+the end of their arm. `ReachEnvelope` starts at the first hand it sees and grows a fraction of the
+way towards wherever hands actually go, so a real reach pulls it out over a few passes while one
+bad detection barely moves it. It grows only while the pen is up — a mapping that shifted
+mid-stroke would slide the line sideways under the hand drawing it.
+
+This is a jitter fix as much as a comfort one. Reaching for an edge past the end of someone's arm
+takes their hand out of the camera frame, tracking is lost, and the stroke breaks. Bad bounds show
+up as jitter, which is not where anyone would look for them.
 
 **Hand tracking at three metres is half proven.** The strokes came out natural on a real
 television at real distance, which was the claim that could have failed. What is still unmeasured
