@@ -17,13 +17,42 @@ data class HandPointer(
     val confidence: Float
 )
 
-/** What both hands are doing this frame. */
+/**
+ * What both hands are doing this frame, keyed by which hand they are.
+ *
+ * Keyed rather than ranked because AirDraw gives the two hands different jobs: one draws, the
+ * other opens the tools. An earlier version handed back "the hand pinching hardest" as the pen,
+ * which cannot express that - the off hand reaching for the tool panel would have become the pen
+ * the moment it pinched harder than the hand holding it.
+ */
 data class HandInput(
     val tracked: Boolean,
-    val drawing: HandPointer?,
-    val other: HandPointer?
+    val left: HandPointer?,
+    val right: HandPointer?,
+    /**
+     * A lone hand the provider would not place.
+     *
+     * `unknown` is a legal handedness in `camera.hand@1`. With two hands on screen, position
+     * settles it; with one there is nothing to compare it against, and calling it the right hand
+     * would leave a left-handed player holding a pen the app cannot see.
+     */
+    val unplaced: HandPointer? = null
 ) {
-    val handCount: Int get() = (if (drawing != null) 1 else 0) + (if (other != null) 1 else 0)
+    val handCount: Int
+        get() = (if (left != null) 1 else 0) + (if (right != null) 1 else 0) + (if (unplaced != null) 1 else 0)
+
+    /** The named hand, or the lone unplaceable one, which is the only hand it could be. */
+    fun hand(which: AepHandHandedness?): HandPointer? = when (which) {
+        AepHandHandedness.LEFT -> left ?: unplaced
+        AepHandHandedness.RIGHT -> right ?: unplaced
+        else -> unplaced
+    }
+
+    fun otherThan(which: AepHandHandedness?): HandPointer? = when (which) {
+        AepHandHandedness.LEFT -> right
+        AepHandHandedness.RIGHT -> left
+        else -> null
+    }
 }
 
 /**
@@ -43,40 +72,84 @@ class HandInterpreter(
     private val pinchExit: Float = 0.35f,
     private val minimumConfidence: Float = 0.4f
 ) {
-    private var pinching = false
+    private val leftPinch = PinchLatch(pinchEnter, pinchExit)
+    private val rightPinch = PinchLatch(pinchEnter, pinchExit)
+    private val lonePinch = PinchLatch(pinchEnter, pinchExit)
 
-    /** True while the pen is down, after hysteresis. */
-    val isPinching: Boolean get() = pinching
+    /** True while that hand is pinched, after hysteresis. */
+    fun isPinching(which: AepHandHandedness?): Boolean = when (which) {
+        AepHandHandedness.LEFT -> leftPinch.on
+        AepHandHandedness.RIGHT -> rightPinch.on
+        else -> false
+    }
+
+    /** True while a lone hand the provider would not place is pinched. */
+    val isLonePinching: Boolean get() = lonePinch.on
 
     fun reset() {
-        pinching = false
+        leftPinch.reset()
+        rightPinch.reset()
+        lonePinch.reset()
     }
 
     fun read(frame: AepHandFrame?, aspect: Float): HandInput {
         if (frame == null || frame.trackingState == AepTrackingState.LOST) {
-            pinching = false
-            return HandInput(tracked = false, drawing = null, other = null)
+            reset()
+            return HandInput(tracked = false, left = null, right = null)
         }
 
-        val pointers = frame.hands
-            .mapNotNull { toPointer(it, aspect) }
-            .sortedByDescending { it.pinch }
-
+        val pointers = resolveSides(frame.hands.mapNotNull { toPointer(it, aspect) })
         if (pointers.isEmpty()) {
-            pinching = false
-            return HandInput(tracked = false, drawing = null, other = null)
+            reset()
+            return HandInput(tracked = false, left = null, right = null)
         }
 
-        // The hand doing the most pinching is the one drawing. That beats fixing it to the right
-        // hand, which is a decision about the player rather than about what they are doing.
-        val drawing = pointers[0]
-        pinching = if (pinching) drawing.pinch > pinchExit else drawing.pinch >= pinchEnter
+        val left = pointers.firstOrNull { it.handedness == AepHandHandedness.LEFT }
+        val right = pointers.firstOrNull { it.handedness == AepHandHandedness.RIGHT }
+        val unplaced = pointers.firstOrNull { it.handedness == AepHandHandedness.UNKNOWN }
+        leftPinch.update(left?.pinch)
+        rightPinch.update(right?.pinch)
+        lonePinch.update(unplaced?.pinch)
 
-        return HandInput(
-            tracked = true,
-            drawing = drawing,
-            other = pointers.getOrNull(1)
-        )
+        return HandInput(tracked = true, left = left, right = right, unplaced = unplaced)
+    }
+
+    /**
+     * Give every hand a side where that can be worked out, and admit it where it cannot.
+     *
+     * `unknown` is a legal value in `camera.hand@1`, and an experience that assumed left or right
+     * would simply stop working against a provider that reports it. With two hands on screen,
+     * position settles it: after mirroring, the hand further left is the left hand. That is not
+     * always true - arms cross - but it is true while someone is drawing, which is when it is
+     * asked.
+     *
+     * With one hand there is nothing to compare it against, so it stays unknown rather than being
+     * guessed at. A guess of "right" would hand a left-handed player a pen the app cannot see.
+     */
+    private fun resolveSides(pointers: List<HandPointer>): List<HandPointer> {
+        if (pointers.none { it.handedness == AepHandHandedness.UNKNOWN }) return pointers
+        if (pointers.size < 2) return pointers
+
+        val ordered = pointers.sortedBy { it.x }
+        return ordered.mapIndexed { index, pointer ->
+            if (pointer.handedness != AepHandHandedness.UNKNOWN) pointer
+            else pointer.copy(
+                handedness = if (index == 0) AepHandHandedness.LEFT else AepHandHandedness.RIGHT
+            )
+        }
+    }
+
+    /** Pinch detection with hysteresis, per hand. */
+    private class PinchLatch(private val enter: Float, private val exit: Float) {
+        var on = false
+            private set
+
+        fun update(strength: Float?) {
+            if (strength == null) { on = false; return }
+            on = if (on) strength > exit else strength >= enter
+        }
+
+        fun reset() { on = false }
     }
 
     private fun toPointer(hand: AepHand, aspect: Float): HandPointer? {

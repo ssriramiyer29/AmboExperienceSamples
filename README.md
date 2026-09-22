@@ -45,7 +45,7 @@ with it.
 |---|---|---|---|---|
 | [`rockdodge-android-tv`](motion-gaming/rockdodge-android-tv/) | motion-gaming | Android TV | 0.7.0 | `camera.pose@1`, `livevideo.person@1` |
 | [`rockdodge-unity`](motion-gaming/rockdodge-unity/) | motion-gaming | Unity | 0.7.0 | `camera.pose@1`, `livevideo.person@1` |
-| [`airdraw-android-tv`](creative-tools/airdraw-android-tv/) | creative-tools | Android TV | 0.8.0 | `camera.hand@1`, `input.touch@1` |
+| [`airdraw-android-tv`](creative-tools/airdraw-android-tv/) | creative-tools | Android TV | 0.8.0 | `camera.hand@1` |
 
 Samples pin different AEP versions on purpose — that is what makes this table a compatibility
 matrix rather than a snapshot.
