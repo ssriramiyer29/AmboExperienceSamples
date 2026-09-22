@@ -3,9 +3,10 @@
 
 Two properties this repository exists to guarantee, and therefore two things worth failing on:
 
-1. **A sample builds from published binaries alone.** The vendored files must be present and must
-   match the AEP version the sample declares. A sample declaring 0.5.1 while carrying 0.5.0
-   binaries builds fine and tests the wrong thing.
+1. **A sample builds from published binaries alone.** The vendored files must be present, tracked
+   by git, and matching the AEP version the sample declares. A sample declaring 0.5.1 while
+   carrying 0.5.0 binaries builds fine and tests the wrong thing; a sample whose binaries were
+   downloaded into the working tree and never committed builds on exactly one machine.
 
 2. **Experience rules stay renderer-independent** - ADR-0001 rule 2. The rule belongs to AEP, but
    the code satisfying it lives here, so it is enforced here. The platform repository is private
@@ -127,6 +128,8 @@ def check_android(sample: pathlib.Path, name: str, version: str) -> None:
             fail(name, f"missing {expected.name}{detail}")
         elif expected.stat().st_size == 0:
             fail(name, f"{expected.name} is empty")
+        elif not is_vendored(expected):
+            fail(name, f"{expected.name} is present but untracked - it would not survive a clone")
         else:
             ok(name, expected.name)
 
@@ -143,6 +146,8 @@ def check_unity(sample: pathlib.Path, name: str, version: str) -> None:
             fail(name, f"missing {UNITY_PLUGIN_DIR}/{plugin}")
         elif dll.stat().st_size == 0:
             fail(name, f"{plugin} is empty")
+        elif not is_vendored(dll):
+            fail(name, f"{plugin} is present but untracked - it would not survive a clone")
         else:
             ok(name, plugin)
 
@@ -151,6 +156,8 @@ def check_unity(sample: pathlib.Path, name: str, version: str) -> None:
     version_file = plugins / "VERSION"
     if not version_file.exists():
         fail(name, f"no {UNITY_PLUGIN_DIR}/VERSION; the DLLs cannot be tied to an AEP version")
+    elif not is_vendored(version_file):
+        fail(name, "VERSION is present but untracked - it would not survive a clone")
     else:
         carried = version_file.read_text().strip()
         if carried != version:
@@ -172,6 +179,48 @@ def check_unity(sample: pathlib.Path, name: str, version: str) -> None:
         fail(name, f"Packages/manifest.json pulls AEP source: {', '.join(source_packages)}")
     else:
         ok(name, "Packages/manifest.json pulls no AEP source")
+
+
+def tracked_paths() -> set[str] | None:
+    """Every path in git's index, or None when this is not a checkout.
+
+    Read once rather than asked per file: a question about the whole index is one process, and
+    this is the kind of check that grows a file at a time until it is slow enough to skip.
+    """
+    inside = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return None
+    listing = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {entry for entry in listing.stdout.split("\0") if entry}
+
+
+TRACKED = tracked_paths()
+
+
+def is_vendored(path: pathlib.Path) -> bool:
+    """Whether this binary would still be there for someone who cloned the repository.
+
+    Presence on disk is not the property this repository promises. A binary downloaded into
+    `libs/` and never committed satisfies every existing check, builds locally, and is simply
+    absent from CI and from every other clone - which is how AirDraw's first pull request went
+    green on the machine that wrote it and red everywhere else.
+
+    Outside a checkout - an archive download, a vendored copy - there is no index to consult and
+    presence is the only question that can be asked. Reported once in main() rather than assumed,
+    so the weaker guarantee is visible rather than looking like the strong one.
+    """
+    if TRACKED is None:
+        return True
+    return path.relative_to(ROOT).as_posix() in TRACKED
 
 
 def git_ignores(path: pathlib.Path) -> bool:
@@ -260,6 +309,9 @@ def main() -> int:
         return 1
 
     print(f"Checking {len(samples)} sample(s)\n")
+    if TRACKED is None:
+        print("note  not a git checkout - binaries are checked for presence, not for being"
+              " committed\n")
     for sample in samples:
         name = sample.name
         try:
