@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A drawn mark on paper: the whole product in one shape, and no text, so it needs no
+     translation and no font. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="#F8F4EC" android:pathData="M0,0h320v180h-320z" />
+    <path
+        android:strokeColor="#2563EB"
+        android:strokeWidth="14"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M54,126 C96,52 132,52 160,96 C188,140 224,140 266,62" />
+    <path android:fillColor="#EF4444" android:pathData="M266,50m-15,0a15,15 0,1 1,30 0a15,15 0,1 1,-30 0" />
+</vector>
