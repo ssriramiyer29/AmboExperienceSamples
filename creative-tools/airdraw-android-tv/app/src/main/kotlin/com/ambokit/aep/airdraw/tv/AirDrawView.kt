@@ -205,38 +205,61 @@ class AirDrawView(
      * as a second pen - the player had to physically hide their other hand to make the screen
      * make sense. A hand that is not drawing still deserves to be acknowledged, but quietly.
      */
+    /**
+     * The pinching hand gets a pen; any other hand gets a quieter ring.
+     *
+     * Sized for a television rather than for a monitor. The first version drew the idle hand as a
+     * small dot at twenty percent opacity on near-white paper, which from three metres away is
+     * indistinguishable from nothing - reported, accurately, as losing the pointer.
+     *
+     * Every cursor carries a white halo under it. The pen takes the current colour, and the
+     * current colour can be the near-black one, or the amber one over a yellow stroke: without
+     * something behind it, the cursor disappears exactly when the canvas gets busy.
+     */
     private fun drawCursors(canvas: Canvas) {
-        val radius = min(width, height) * 0.018f
+        val radius = min(width, height) * 0.026f
         for (cursor in cursors) {
             // Both axes are normalised on width, which is why y is scaled by it too.
             val x = cursor.x * width
             val y = cursor.y * width
 
             if (!cursor.pinching) {
-                paint.style = Paint.Style.FILL
+                halo(canvas, x, y, radius * 0.62f, radius * 0.2f)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = radius * 0.2f
                 paint.color = IDLE_HAND
-                canvas.drawCircle(x, y, radius * 0.28f, paint)
+                canvas.drawCircle(x, y, radius * 0.62f, paint)
                 continue
             }
 
+            halo(canvas, x, y, radius, radius * 0.26f)
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = radius * 0.22f
+            paint.strokeWidth = radius * 0.26f
             paint.color = strip.colour
             canvas.drawCircle(x, y, radius, paint)
 
             if (cursor.waiting) {
-                // The pen is down and the hand is gone. Left hollow, and held where it was: the
-                // stroke has not ended, and a cursor that vanished here read as the app quitting.
-                paint.strokeWidth = radius * 0.1f
-                canvas.drawCircle(x, y, radius * 1.5f, paint)
+                // The pen is down and the hand is gone. Held where it last was, with an outer
+                // ring to say the app is waiting rather than drawing - a cursor that vanished
+                // here read as the app quitting.
+                paint.strokeWidth = radius * 0.12f
+                canvas.drawCircle(x, y, radius * 1.6f, paint)
                 continue
             }
 
             // Filled while the pen is down, so "am I drawing?" is answerable from the sofa.
             paint.style = Paint.Style.FILL
-            canvas.drawCircle(x, y, radius * 0.45f, paint)
+            canvas.drawCircle(x, y, radius * 0.42f, paint)
         }
         paint.style = Paint.Style.FILL
+    }
+
+    /** A white ring under a cursor, so it survives whatever it is drawn over. */
+    private fun halo(canvas: Canvas, x: Float, y: Float, radius: Float, weight: Float) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = weight * 2.1f
+        paint.color = Color.WHITE
+        canvas.drawCircle(x, y, radius, paint)
     }
 
     /**
@@ -320,6 +343,6 @@ class AirDrawView(
         const val INK = 0xFF111827.toInt()
         const val MUTED = 0xFF6B7280.toInt()
         const val SCRIM = 0xE6111827.toInt()
-        const val IDLE_HAND = 0x33111827
+        const val IDLE_HAND = 0xAA4B5563.toInt()
     }
 }

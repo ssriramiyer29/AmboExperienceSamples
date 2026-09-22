@@ -122,19 +122,23 @@ what the active-area bounds should be set from.
 
 ## Known limits
 
-**The phone overheats, and hand tracking is what starves.** Measured on a television, counting
-frames rather than sampling them:
+**It works at about 5–6 feet, and not much outside that.** Further and the tracker stops finding
+hands at all; closer and it responds badly. Anything built on this — a demo, a store listing, a
+room — has to assume that window until the provider widens it.
 
-| | mean frames with no hand |
-|---|---|
-| first 80 seconds of a session | 12% |
-| after 80 seconds | 65% |
+**Hand loss climbs during a session, and the cause is not established.** Counting frames rather
+than sampling them, one session averaged 12% frames with no hand over its first eighty seconds
+and 65% after them. Thermal throttling is the obvious suspect: AmboKit's certification record has
+the same device reaching `THERMAL_STATUS_SEVERE` in about a minute under camera plus on-device
+ML, and attributes its 14.8–18.8 Hz pose-rate spread to thermal state rather than noise.
 
-It degrades with elapsed time, not with what the player is doing. AmboKit's certification record
-says the same device reaches `THERMAL_STATUS_SEVERE` in about a minute under camera plus
-on-device ML, and that the measured pose-rate spread of 14.8–18.8 Hz is thermal state rather than
-noise. This is the wall AirDraw is currently up against, and it is not in AirDraw: everything
-below is compensation for it.
+But that session also had the player moving between distances, and distance has a large effect of
+its own, so elapsed time and distance are confounded in it. The test that separates them has not
+been run: a cold device, a fixed 5–6 feet, three minutes, watching whether loss climbs. Until
+that exists this is a correlation with a plausible mechanism, not a diagnosis.
+
+Either way it is the wall AirDraw is up against, and it is not in AirDraw — everything below is
+compensation for it.
 
 It is also why **zoom is unreliable**. Two hands appeared together in 2 of 25 intervals, and zoom
 needs both tracked and both pinching at the same instant.
