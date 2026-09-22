@@ -134,6 +134,48 @@ def check_android(sample: pathlib.Path, name: str, version: str) -> None:
             ok(name, expected.name)
 
 
+CLEARTEXT_FLAG = re.compile(r'android:usesCleartextTraffic\s*=\s*"true"')
+SECURITY_CONFIG = re.compile(r'android:networkSecurityConfig\s*=\s*"@xml/([A-Za-z0-9_]+)"')
+CLEARTEXT_PERMITTED = re.compile(r'cleartextTrafficPermitted\s*=\s*"true"')
+
+
+def check_can_reach_its_gateway(sample: pathlib.Path, name: str) -> None:
+    """An Android sample must be allowed to talk to the Gateway running inside it.
+
+    `EmbeddedAndroidAmboKitHost` starts the AmboKit Gateway in-process on loopback, so an
+    experience's first action is an HTTP call to 127.0.0.1. Cleartext has been blocked by default
+    since API 28, and a manifest that does not permit it produces an app that builds, installs,
+    launches, passes every other check here - and then cannot open a session at all. AirDraw
+    shipped exactly that way and was found by someone standing in front of a television.
+
+    Either answer is accepted: a scoped network security config, or the blanket flag.
+    """
+    manifests = [p for p in sample.rglob("AndroidManifest.xml") if "build" not in p.parts]
+    if not manifests:
+        fail(name, "no AndroidManifest.xml")
+        return
+    manifest = manifests[0]
+    text = manifest.read_text(encoding="utf-8")
+
+    if CLEARTEXT_FLAG.search(text):
+        ok(name, "may reach its embedded Gateway (cleartext permitted app-wide)")
+        return
+
+    match = SECURITY_CONFIG.search(text)
+    if not match:
+        fail(name, "manifest permits no cleartext, so it cannot reach the Gateway inside it "
+                   "(add a networkSecurityConfig for 127.0.0.1, or usesCleartextTraffic)")
+        return
+
+    config = manifest.parent / "res" / "xml" / f"{match.group(1)}.xml"
+    if not config.exists():
+        fail(name, f"manifest points at @xml/{match.group(1)}, which does not exist")
+    elif not CLEARTEXT_PERMITTED.search(config.read_text(encoding="utf-8")):
+        fail(name, f"@xml/{match.group(1)} permits no cleartext, so loopback is still blocked")
+    else:
+        ok(name, "may reach its embedded Gateway (cleartext scoped to loopback)")
+
+
 def check_unity(sample: pathlib.Path, name: str, version: str) -> None:
     plugins = sample / UNITY_PLUGIN_DIR
     if not plugins.is_dir():
@@ -337,6 +379,7 @@ def main() -> int:
 
         if renderer == "android-tv":
             check_android(sample, name, version)
+            check_can_reach_its_gateway(sample, name)
             check_no_platform_source(sample, name)
         elif renderer == "unity":
             check_unity(sample, name, version)
