@@ -5,6 +5,7 @@ import android.graphics.*
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import com.ambokit.aep.core.AepConnectionState
 import com.ambokit.aep.core.AepState
 import com.ambokit.aep.core.AepJoinInfo
 import com.ambokit.aep.core.AepPoseFrame
