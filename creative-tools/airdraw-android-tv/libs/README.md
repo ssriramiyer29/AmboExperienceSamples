@@ -16,10 +16,11 @@ gh release download v0.8.0 --repo ssriramiyer29/amboexperienceplatform --dir .
 
 ## Why 0.8.0 and not something earlier
 
-AirDraw needs `camera.hand@1` and `input.touch@1`. Before 0.8.0 an Android experience could not
-request either: `AndroidAmboKitHost` built its own capability list in its constructor and never
-read `AepExperienceDefinition.capabilities`, so every Android experience got `camera.pose` and
-optionally `livevideo.person` no matter what it declared.
+AirDraw needs `camera.hand@1`. Before 0.8.0 an Android experience could not request it:
+`AndroidAmboKitHost` built its own capability list in its constructor and never read
+`AepExperienceDefinition.capabilities`, so every Android experience got `camera.pose` and
+optionally `livevideo.person` no matter what it declared - eleven of the thirteen capabilities
+were unreachable from Android.
 
 This sample is the reason that was found.
 
