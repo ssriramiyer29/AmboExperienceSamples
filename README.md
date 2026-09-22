@@ -43,7 +43,7 @@ with it.
 
 | Sample | Domain | Renderer | AEP | Capabilities |
 |---|---|---|---|---|
-| [`rockdodge-android-tv`](motion-gaming/rockdodge-android-tv/) | motion-gaming | Android TV | 0.6.0 | `camera.pose@1`, `livevideo.person@1` |
+| [`rockdodge-android-tv`](motion-gaming/rockdodge-android-tv/) | motion-gaming | Android TV | 0.7.0 | `camera.pose@1`, `livevideo.person@1` |
 
 RockDodge is a **developer sample**, not a product.
 

@@ -28,6 +28,13 @@ class RockDodgeView(context: Context) : View(context) {
     var snapshot: RockDodgeSnapshot? = null
     var joinInfo: AepJoinInfo? = null
     var experienceState: AepState = AepState.CREATED
+
+    /**
+     * Health of the link to the phone, which AEP reports separately from the experience state
+     * (ADR-0002). Drawn over everything, including a running game: the moment it stops being
+     * CONNECTED is exactly the moment the player is wondering why nothing is responding.
+     */
+    var connectionState: AepConnectionState = AepConnectionState.CONNECTING
     var statusText: String = "Starting AmboExperiencePlatform…"
     var playerBitmap: Bitmap? = null
     var poseFrame: AepPoseFrame? = null
@@ -68,9 +75,41 @@ class RockDodgeView(context: Context) : View(context) {
         val snap = snapshot
         if (snap == null || (!snap.running && !snap.completed)) {
             drawJoinAndCalibration(canvas, w, h)
+            drawConnectionBanner(canvas, w, h)
             return
         }
         drawGame(canvas, w, h, snap)
+        drawConnectionBanner(canvas, w, h)
+    }
+
+    /**
+     * The one piece of UI that must survive every other screen.
+     *
+     * statusText is only drawn on the join/calibration screen, so before this existed a link that
+     * dropped mid-game showed the player nothing at all: the rocks simply stopped responding and
+     * the game looked broken rather than interrupted. Drawn last, so it sits above the game.
+     */
+    private fun drawConnectionBanner(canvas: Canvas, w: Float, h: Float) {
+        val message = when (connectionState) {
+            AepConnectionState.RECONNECTING -> "Reconnecting to your phone…"
+            AepConnectionState.REJOIN_REQUIRED -> "Connection lost — scan the code again"
+            AepConnectionState.CLOSED -> "Disconnected"
+            else -> return
+        }
+
+        val bannerHeight = h * .072f
+        paint.shader = null
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(232, 24, 16, 14)
+        canvas.drawRect(0f, 0f, w, bannerHeight, paint)
+        paint.color = Color.rgb(255, 168, 76)
+        canvas.drawRect(0f, bannerHeight - h * .004f, w, bannerHeight, paint)
+
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = bodyTypeface
+        paint.textSize = h * .026f
+        paint.color = Color.rgb(255, 226, 196)
+        canvas.drawText(message, w / 2f, bannerHeight * .64f, paint)
     }
 
     private fun drawWorld(canvas: Canvas, w: Float, h: Float) {

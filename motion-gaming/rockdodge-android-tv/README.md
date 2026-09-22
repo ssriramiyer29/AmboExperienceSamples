@@ -7,7 +7,7 @@ Built entirely on **published AEP binaries** (see [`libs/`](libs/)) — no platf
 
 | | |
 |---|---|
-| **AEP version** | 0.6.0 |
+| **AEP version** | 0.7.0 |
 | **Renderer** | Android TV |
 | **Capabilities** | `camera.pose@1` required, `livevideo.person@1` optional |
 | **minSdk** | 24 |
