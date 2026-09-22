@@ -139,6 +139,13 @@ television at real distance, which was the claim that could have failed. What is
 is the landmark jitter the band edges in `StrokeSmoothing.forJitter()` were guessed from.
 Everything that felt wrong on first contact was control, not rendering.
 
+**Startup used to kill the app.** AirDraw built its QR code with `setPixel` in a nested loop on
+the UI thread — 409,600 JNI crossings — which on a television's SoC took longer than the five
+seconds Android waits before declaring an app unresponsive. It was intermittent because it was a
+race between that loop and the window taking focus. Encoding is one array call on a worker thread
+now. Worth remembering as a shape of bug: it never showed up in a build, a test or a check, only
+in an ANR trace with the main thread at 94% user CPU.
+
 **Nothing is saved.** `Drawing` keeps strokes as data and can undo, redo and restore, but nothing
 writes them anywhere. A drawing lives as long as the app does.
 

@@ -20,6 +20,7 @@ import com.ambokit.aep.core.capabilities.AepHandHandedness
 import com.ambokit.aep.host.AepPayloadJson
 import com.ambokit.aep.host.ambokit.EmbeddedAndroidAmboKitHost
 import com.ambokit.aep.host.tv.AndroidTvExperienceHost
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.hypot
 
@@ -64,6 +65,13 @@ class MainActivity : Activity() {
 
     private var frames = 0L
 
+    /** QR encoding, kept off the thread that has to stay responsive. */
+    private val qrWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "airdraw-qr").apply { isDaemon = true }
+    }
+
+    private var lastJoinUrl: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -106,13 +114,7 @@ class MainActivity : Activity() {
                     view.invalidate()
                 }
             }
-            live.joinChanged += { join ->
-                runOnUiThread {
-                    view.joinUrl = join.url
-                    view.joinQr = QrCodeBitmap.create(join.url)
-                    view.invalidate()
-                }
-            }
+            live.joinChanged += { join -> onJoinChanged(join.url) }
             live.error += { error ->
                 runOnUiThread { view.status = "${error.code}: ${error.message}"; view.invalidate() }
             }
@@ -120,6 +122,36 @@ class MainActivity : Activity() {
 
         tvHost = AndroidTvExperienceHost(session) { _ -> onFrame() }
         tvHost.start()
+    }
+
+    /**
+     * Put the join URL on screen, and the QR alongside it once it exists.
+     *
+     * Encoding happens on a worker, because doing it on the main thread is what was killing the
+     * app at startup - see [QrCodeBitmap]. The URL appears immediately either way, so a slow
+     * encode degrades to "type this in" rather than to a blank screen.
+     */
+    private fun onJoinChanged(url: String) {
+        runOnUiThread {
+            view.joinUrl = url
+            view.invalidate()
+        }
+        if (url == lastJoinUrl) return
+        lastJoinUrl = url
+        qrWorker.execute {
+            val bitmap = QrCodeBitmap.create(url)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) {
+                    bitmap?.recycle()
+                    return@runOnUiThread
+                }
+                // The join can be reissued, and each reissue used to leave the last megabyte of
+                // bitmap behind it.
+                view.joinQr?.let { if (!it.isRecycled) it.recycle() }
+                view.joinQr = bitmap
+                view.invalidate()
+            }
+        }
     }
 
     private fun letGo() {
@@ -303,6 +335,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         if (::tvHost.isInitialized) tvHost.stop()
+        qrWorker.shutdownNow()
         view.recycleBitmaps()
         super.onDestroy()
     }
