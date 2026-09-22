@@ -122,6 +122,23 @@ what the active-area bounds should be set from.
 
 ## Known limits
 
+**The phone overheats, and hand tracking is what starves.** Measured on a television, counting
+frames rather than sampling them:
+
+| | mean frames with no hand |
+|---|---|
+| first 80 seconds of a session | 12% |
+| after 80 seconds | 65% |
+
+It degrades with elapsed time, not with what the player is doing. AmboKit's certification record
+says the same device reaches `THERMAL_STATUS_SEVERE` in about a minute under camera plus
+on-device ML, and that the measured pose-rate spread of 14.8–18.8 Hz is thermal state rather than
+noise. This is the wall AirDraw is currently up against, and it is not in AirDraw: everything
+below is compensation for it.
+
+It is also why **zoom is unreliable**. Two hands appeared together in 2 of 25 intervals, and zoom
+needs both tracked and both pinching at the same instant.
+
 **The provider loses the hand, often.** In a logged session it reported no hands at all in 13% of
 frames — a dozen dropouts in two minutes. That, not the pinch threshold, is what used to chop a
 drawn line into pieces: thirty-nine strokes were recorded for a handful of intended marks. A pinch

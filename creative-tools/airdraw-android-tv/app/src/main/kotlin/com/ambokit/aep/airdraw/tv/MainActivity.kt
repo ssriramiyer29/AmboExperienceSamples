@@ -63,6 +63,9 @@ class MainActivity : Activity() {
     private var lastPenX: Float? = null
     private var lastPenY: Float? = null
 
+    /** Whether the hand was missing last frame, so the jump guard applies only on its return. */
+    private var penWasMissing = false
+
     // Counted over the interval rather than sampled at the end of it. The previous version
     // printed the state of one frame in fifteen, which cannot measure how often the tracker
     // loses the hand or for how long - and those turned out to be the numbers that mattered.
@@ -163,8 +166,17 @@ class MainActivity : Activity() {
         }
     }
 
+    /** One place where a stroke ends, so the diagnostics can count every one of them. */
+    private fun endStroke() {
+        if (!drawing) return
+        engine.end()
+        strokesEnded++
+        drawing = false
+        hadPen = false
+    }
+
     private fun letGo() {
-        if (drawing) engine.end()
+        endStroke()
         drawing = false
         hadPen = false
         lastPenX = null
@@ -223,13 +235,19 @@ class MainActivity : Activity() {
             }
             return
         }
+
+        // Both pinches still held, but a hand has blinked out: hold the gesture rather than
+        // ending it. Two hands are seen together rarely enough that abandoning a zoom at the
+        // first missing frame means never completing one.
+        val bothHeld = hands.isPinching(AepHandHandedness.LEFT) && hands.isPinching(AepHandHandedness.RIGHT)
+        if (bothHeld && zoom.isActive) return
+
         zoom.end()
 
         // Held and visible are different questions. A pinch survives the hand vanishing for a
         // moment; during that moment there is simply nowhere to draw.
         if (!hands.isPenHeld) {
-            if (drawing) { engine.end(); strokesEnded++ }
-            drawing = false
+            endStroke()
             hadPen = false
             return
         }
@@ -238,18 +256,26 @@ class MainActivity : Activity() {
         if (pen == null) {
             // The tracker blinked. Hold the stroke open and add nothing to it - the alternative
             // is ending a line the player is still drawing, several times a minute.
+            penWasMissing = true
             return
         }
 
         // The hand came back somewhere else entirely. Bridging that would draw a straight line
         // across the picture, which is worse than the seam it was meant to avoid.
-        if (drawing && lastPenX != null && lastPenY != null &&
-            hypot(pen.x - lastPenX!!, pen.y - lastPenY!!) > REACQUIRE_JUMP
-        ) {
-            engine.end()
-            drawing = false
-            hadPen = false
+        //
+        // Only on the frame the hand comes back, which is the fix for a bug this check created:
+        // applied every frame, it chopped fast strokes. At 11 Hz a hand crossing half the screen
+        // in half a second moves nearly a tenth of it between frames, so drawing quickly tripped
+        // the guard over and over - eleven strokes in five seconds, in an interval where nothing
+        // was lost at all.
+        if (penWasMissing && drawing) {
+            val fromX = lastPenX
+            val fromY = lastPenY
+            if (fromX != null && fromY != null && hypot(pen.x - fromX, pen.y - fromY) > REACQUIRE_JUMP) {
+                endStroke()
+            }
         }
+        penWasMissing = false
         lastPenX = pen.x
         lastPenY = pen.y
 
