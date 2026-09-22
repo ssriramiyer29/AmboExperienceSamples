@@ -4,6 +4,7 @@ import com.ambokit.aep.core.AepTrackingState
 import com.ambokit.aep.core.capabilities.AepHand
 import com.ambokit.aep.core.capabilities.AepHandFrame
 import com.ambokit.aep.core.capabilities.AepHandHandedness
+import kotlin.math.abs
 import kotlin.math.hypot
 
 /** One hand, reduced to what a drawing tool cares about. */
@@ -68,10 +69,23 @@ data class HandInput(
  */
 class HandInterpreter(
     private val mirrorX: Boolean = true,
-    private val pinchEnter: Float = 0.6f,
-    private val pinchExit: Float = 0.35f,
+    /**
+     * Provisional, and known to be provisional.
+     *
+     * 0.6 was a guess made before anyone had pinched at a television, and on hardware it missed
+     * pinches the player had certainly made. These are lowered as an interim; the numbers that
+     * replace them should come from the diagnostics, not from another guess.
+     */
+    private val pinchEnter: Float = 0.5f,
+    private val pinchExit: Float = 0.28f,
     private val minimumConfidence: Float = 0.4f
 ) {
+    /** The pinch strengths seen this frame, for diagnostics. Null where no hand was there. */
+    var lastLeftPinch: Float? = null
+        private set
+    var lastRightPinch: Float? = null
+        private set
+
     private val leftPinch = PinchLatch(pinchEnter, pinchExit)
     private val rightPinch = PinchLatch(pinchEnter, pinchExit)
     private val lonePinch = PinchLatch(pinchEnter, pinchExit)
@@ -90,6 +104,24 @@ class HandInterpreter(
         leftPinch.reset()
         rightPinch.reset()
         lonePinch.reset()
+        lastLeftPinch = null
+        lastRightPinch = null
+    }
+
+    /**
+     * The hand that is drawing: whichever one is pinching.
+     *
+     * Not the hand the player nominated at the start. An earlier version asked them to choose,
+     * and then chose wrong - a hand curled around a phone being set down looks exactly like a
+     * pinch - which left the pen on the wrong hand with no way back. Asking the question at all
+     * was the mistake: the hand that is pinching is the hand that is drawing, and it needs no
+     * setting up and cannot be got wrong.
+     */
+    fun penHand(input: HandInput): HandPointer? = when {
+        input.unplaced != null -> if (lonePinch.on) input.unplaced else null
+        leftPinch.on && !rightPinch.on -> input.left
+        rightPinch.on && !leftPinch.on -> input.right
+        else -> null
     }
 
     fun read(frame: AepHandFrame?, aspect: Float): HandInput {
@@ -110,6 +142,8 @@ class HandInterpreter(
         leftPinch.update(left?.pinch)
         rightPinch.update(right?.pinch)
         lonePinch.update(unplaced?.pinch)
+        lastLeftPinch = left?.pinch
+        lastRightPinch = (right ?: unplaced)?.pinch
 
         return HandInput(tracked = true, left = left, right = right, unplaced = unplaced)
     }
@@ -187,27 +221,59 @@ class HandInterpreter(
 /**
  * Two-handed pinch to zoom and pan, the gesture everyone already knows from a phone.
  *
- * Tracked as a delta from where the gesture started rather than frame to frame, so a dropped
- * frame cannot leave the canvas permanently scaled wrong.
+ * Everything is measured from a single anchor taken when the gesture starts, and never from the
+ * previous frame. That distinction is the whole difference between a zoom that holds still and
+ * one that crawls: with a frame-to-frame delta, each frame's tracking noise is applied and then
+ * kept, so the canvas performs a random walk and drifts while two hands are held perfectly
+ * still. Against a fixed anchor the same noise only wobbles around the truth.
+ *
+ * On top of that: the separation and midpoint are low-passed, because hand landmarks at three
+ * metres are noisy at exactly the frequency that reads as shake; small changes are ignored
+ * entirely; and the gesture does nothing at all until the hands have moved enough to mean it, so
+ * grabbing does not jolt the canvas.
  */
-class ZoomGesture {
+class ZoomGesture(
+    private val smoothing: Float = 0.25f,
+    /**
+     * Deadbands large enough to swallow the noise, which is what makes them worth having.
+     *
+     * They are measured against what has already been applied, not against the previous frame,
+     * so a slow deliberate pan is not suppressed - the unapplied difference accumulates until it
+     * crosses, and then moves. Only movement that never goes anywhere is ignored.
+     */
+    private val scaleDeadband: Float = 0.02f,
+    private val panDeadband: Float = 0.01f,
+    private val engageSlop: Float = 0.03f
+) {
     private var active = false
-    private var startSeparation = 0f
-    private var startMidX = 0f
-    private var startMidY = 0f
+    private var engaged = false
+
+    private var anchorSeparation = 0f
+    private var anchorMidX = 0f
+    private var anchorMidY = 0f
+
+    private var smoothSeparation = 0f
+    private var smoothMidX = 0f
+    private var smoothMidY = 0f
+
+    /** What has already been handed to the viewport, so the next change is only the difference. */
+    private var appliedRatio = 1f
+    private var appliedPanX = 0f
+    private var appliedPanY = 0f
 
     val isActive: Boolean get() = active
 
     fun end() {
         active = false
+        engaged = false
     }
 
     /**
-     * @return scale factor and pan delta since the last update, or null when not zooming.
+     * @return the change to apply since the last one, or null when there is nothing worth applying.
      */
     fun update(a: HandPointer?, b: HandPointer?, bothPinching: Boolean): Change? {
         if (a == null || b == null || !bothPinching) {
-            active = false
+            end()
             return null
         }
         val separation = hypot(a.x - b.x, a.y - b.y)
@@ -216,24 +282,54 @@ class ZoomGesture {
 
         if (!active) {
             active = true
-            startSeparation = separation
-            startMidX = midX
-            startMidY = midY
+            engaged = false
+            anchorSeparation = separation
+            anchorMidX = midX
+            anchorMidY = midY
+            smoothSeparation = separation
+            smoothMidX = midX
+            smoothMidY = midY
+            appliedRatio = 1f
+            appliedPanX = 0f
+            appliedPanY = 0f
             return null
         }
-        if (startSeparation <= 1e-4f) return null
+        if (anchorSeparation <= 1e-4f) return null
 
-        val change = Change(
-            scale = separation / startSeparation,
-            panX = midX - startMidX,
-            panY = midY - startMidY,
-            focusX = midX,
-            focusY = midY
+        smoothSeparation += smoothing * (separation - smoothSeparation)
+        smoothMidX += smoothing * (midX - smoothMidX)
+        smoothMidY += smoothing * (midY - smoothMidY)
+
+        val ratio = smoothSeparation / anchorSeparation
+        val panX = smoothMidX - anchorMidX
+        val panY = smoothMidY - anchorMidY
+
+        // Nothing happens until the hands have said something. Without this, the act of closing
+        // both pinches moves the canvas before the player has begun the gesture they intended.
+        if (!engaged) {
+            if (abs(ratio - 1f) < engageSlop && hypot(panX, panY) < engageSlop) return null
+            engaged = true
+        }
+
+        // Scale and pan are released independently. Sharing one gate meant that zooming, which
+        // crosses its threshold constantly, dragged every scrap of midpoint noise onto the canvas
+        // with it.
+        val scale = ratio / appliedRatio
+        val deltaX = panX - appliedPanX
+        val deltaY = panY - appliedPanY
+        val movesScale = abs(scale - 1f) >= scaleDeadband
+        val movesPan = hypot(deltaX, deltaY) >= panDeadband
+        if (!movesScale && !movesPan) return null
+
+        if (movesScale) appliedRatio = ratio
+        if (movesPan) { appliedPanX = panX; appliedPanY = panY }
+        return Change(
+            scale = if (movesScale) scale else 1f,
+            panX = if (movesPan) deltaX else 0f,
+            panY = if (movesPan) deltaY else 0f,
+            focusX = smoothMidX,
+            focusY = smoothMidY
         )
-        startSeparation = separation
-        startMidX = midX
-        startMidY = midY
-        return change
     }
 
     data class Change(

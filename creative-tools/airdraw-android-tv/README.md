@@ -42,42 +42,49 @@ So the interesting part of AirDraw is not the gesture. It is `core/`:
 All of it is arithmetic with no renderer in it, which is both what ADR-0001 rule 2 requires and
 what lets the part that makes the product good be tested without a TV.
 
-## Two hands, two jobs
-
-The player pinches once, at the start, with the hand they draw with. That hand is the pen for the
-rest of the session; the other one opens the tools.
+## How it is used
 
 | Gesture | Action |
 |---|---|
-| Drawing hand, open | move the cursor |
-| Drawing hand, pinch | draw |
-| Other hand, pinch and release | open or close the tool panel |
-| Panel open: drawing hand pinch | take the colour, width or undo it is over |
+| Pinch, on the canvas | draw |
+| Open the hand | lift the pen |
+| Pinch, on the strip | take the colour, undo, or flip the strip to the other side |
 | Both hands pinching | zoom and pan |
+
+**Whichever hand pinches is the pen.** There is nothing to set up. An earlier version asked the
+player to nominate a drawing hand at the start, and then chose for them off the first pinch it
+saw — which, on a real television, was a hand curled around a phone being set down. Wrong hand,
+no way back, session ruined. The question was the mistake: the hand that is pinching is the hand
+that is drawing.
 
 The pen tip is the midpoint of your thumb and index fingertips rather than a single landmark,
 because pinching moves either fingertip several centimetres while their midpoint stays put. A
 cursor that jumps when you start drawing is a cursor nobody can aim.
 
-### Why there is no menu to pick your hand with
+### The palette is always on screen
 
-Hands are the only input this app has, and the handedness question comes before everything else.
-So it is asked with the one gesture the player is about to need anyway: pinch with the hand you
-draw with. The answer and the tutorial are the same gesture.
+Six percent of the width, permanently, and ninety-four percent is canvas. The version before this
+hid the palette behind an off-hand gesture and saved the space. What it cost was a player stranded
+on a colour they had not picked, with the gesture that would have released them refusing to fire.
+A control you cannot get back to is worse than one that takes up room.
 
-### Why the panel opens on release
+A pinch that *begins* on the strip takes what it is over. A stroke that began on the canvas keeps
+drawing wherever the hand goes, including across the strip — so the palette can take a pinch, but
+it can never take a mark already in progress.
 
-Both hands pinching already means zoom. A panel that toggled the instant the off hand closed
-would fire on the way into every zoom. So the toggle waits for the release, and is cancelled if
-the drawing hand pinched at any point during it. Pinch alone → panel. Pinch together → zoom. No
-timers, and nothing to tune.
+There is no width picker. Ten targets down the edge of a screen is small for a hand wavering at
+three metres, and a target that cannot be hit reliably is worse than one that is not offered.
+Line weight still varies with speed inside a stroke; you just do not choose a base.
 
-### Why the panel sits on the drawing side
+### Zoom measures from an anchor, not from the last frame
 
-It is the hand that has to reach it, and it overlays the canvas rather than shrinking it — a
-drawing that shifted sideways every time the tools appeared would be unusable. It is laid out in
-`core/`, and the renderer paints exactly the cells the hit test uses, so a button cannot look like
-it is somewhere it is not.
+Two hands pinching zooms and pans. The gesture takes one anchor when it starts and measures
+everything from that, which sounds like an implementation detail and is the entire difference
+between a zoom that holds still and one that crawls: measured frame to frame, each frame's
+tracking noise is applied and then kept, so the canvas performs a random walk while two hands are
+held perfectly still. The separation is also low-passed, and changes below a threshold are
+ignored — measured against what has already been applied, so a slow deliberate pan still works,
+it just arrives in steps.
 
 ## Build
 
@@ -95,14 +102,27 @@ does not build — see `libs/README.md`.
 2. Open AmboCompanion on a phone on the same network and prop it up facing you.
 3. Scan the code on screen.
 4. Grant `camera.hand`.
-5. Pinch with the hand you draw with, and draw.
+5. Pinch and draw. Either hand.
+
+While tuning, the app prints what it sees roughly once a second:
+
+```bash
+adb logcat -s AirDraw
+# tracked=true hands=2 L=0.31 R=0.78 pinchL=false pinchR=true drawing=true zoom=false scale=1.00 strokes=4
+```
 
 ## Known limits
 
-**Hand tracking at three metres is unproven.** Body pose is well established at that range; hand
-landmarks are smaller and may be considerably noisier. The stroke pipeline is built to be tuned
-from a measurement rather than an assumption, and that measurement has not been taken — the band
-edges in `StrokeSmoothing.forJitter()` come from simulation.
+**The pinch thresholds are provisional and known to be.** 0.6 to enter was a number picked before
+anyone had pinched at a television, and on hardware it missed pinches that had certainly been
+made. They are lowered to 0.5 and 0.28 as an interim. The numbers that replace them should come
+from the diagnostics above, not from another guess.
+
+**Hand tracking at three metres is only half proven.** The strokes themselves came out natural on
+a real television at real distance, which was the claim that could have failed. What is still
+unmeasured is the landmark jitter the band edges in `StrokeSmoothing.forJitter()` were guessed
+from, and the pinch strength the thresholds above were guessed from. Everything that felt wrong on
+first contact was control, not rendering.
 
 **Nothing is saved.** `Drawing` keeps strokes as data and can undo, redo and restore, but nothing
 writes them anywhere. A drawing lives as long as the app does.
@@ -115,5 +135,12 @@ pipeline still has the pressure path (`StrokeSource.TOUCH`, tested) for the vers
 that out.
 
 **One hand does less.** If the provider reports handedness as `unknown` — which the schema
-permits — two hands are told apart by position, but a single hand cannot be. It still draws; it
-just cannot zoom or open the tools, because both of those need a second hand.
+permits — two hands are told apart by position, but a single hand cannot be. It still draws and
+still picks colours; it cannot zoom, which needs a second hand by definition.
+
+**Everything rides on one gesture.** Pinch draws, pinch picks, two pinches zoom. That is a lot of
+meaning on a channel that is noisy at this distance, and it is why the controls felt jittery while
+the strokes did not. `audio.speech@1` is the obvious way out — it is on-device, its `ready` payload
+guarantees `rawAudioShared: false`, and AirDraw itself would need no microphone permission because
+the phone does the listening. Saying "red" or "undo" would leave pinch meaning exactly one thing.
+Not built yet.

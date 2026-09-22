@@ -2,13 +2,14 @@ package com.ambokit.aep.airdraw.tv
 
 import android.app.Activity
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import com.ambokit.aep.airdraw.AirDrawEngine
 import com.ambokit.aep.airdraw.AirDrawPoint
-import com.ambokit.aep.airdraw.DominantHand
+import com.ambokit.aep.airdraw.HandInput
 import com.ambokit.aep.airdraw.HandInterpreter
 import com.ambokit.aep.airdraw.StrokeSource
-import com.ambokit.aep.airdraw.ToolPanel
+import com.ambokit.aep.airdraw.ToolStrip
 import com.ambokit.aep.airdraw.ZoomGesture
 import com.ambokit.aep.core.Aep
 import com.ambokit.aep.core.AepCapabilityEvent
@@ -24,9 +25,9 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * AirDraw: the TV is the canvas and your hand in the air is the pen.
  *
- * One capability, `camera.hand`, and two hands with different jobs. The drawing hand - the one
- * the player pinches with when asked, at the start - is the pen. The other hand opens and closes
- * the tool panel, and then the pen reaches over and picks from it.
+ * One capability, `camera.hand`. Whichever hand pinches is the pen - there is nothing to set up
+ * and nothing to choose. The palette is a strip down one edge that is always there, and a pinch
+ * that begins inside it takes what it is over.
  *
  * Neither the drawing rules nor the gesture interpretation live here. This class owns the screen,
  * the session and the frame clock, and nothing else - ADR-0001 rule 2. Everything that decides
@@ -42,8 +43,7 @@ class MainActivity : Activity() {
     private val engine = AirDrawEngine()
     private val hands = HandInterpreter()
     private val zoom = ZoomGesture()
-    private val panel = ToolPanel()
-    private val dominant = DominantHand()
+    private val strip = ToolStrip()
 
     /**
      * Hand frames are conflated before they reach the UI thread, exactly as RockDodge conflates
@@ -52,19 +52,23 @@ class MainActivity : Activity() {
      */
     private val latestHandFrame = AtomicReference<AepHandFrame?>(null)
 
-    private var drawingWithAir = false
+    private var drawing = false
 
-    /** Selection happens on the pinch closing, not while it is held. */
-    private var penWasPinching = false
+    /** Whether a pen was present last frame, so a pinch is acted on once rather than every frame. */
+    private var hadPen = false
+
+    /** Which hand holds the pen, so a stroke does not silently transfer to the other one. */
+    private var penSide: AepHandHandedness? = null
+
+    private var frames = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        view = AirDrawView(this, engine, panel)
+        view = AirDrawView(this, engine, strip)
         setContentView(view)
-        engine.colour = panel.tools.colour
-        engine.baseWidth = panel.tools.width
+        engine.colour = strip.colour
 
         host = EmbeddedAndroidAmboKitHost()
         session = Aep.start(
@@ -86,12 +90,7 @@ class MainActivity : Activity() {
                     view.connection = state
                     // A phone that has gone away is not still pinching. Without this the stroke
                     // in progress stays open and joins up with whatever is drawn next.
-                    if (state != AepConnectionState.CONNECTED) {
-                        if (drawingWithAir) { engine.end(); drawingWithAir = false }
-                        hands.reset()
-                        panel.reset()
-                        penWasPinching = false
-                    }
+                    if (state != AepConnectionState.CONNECTED) letGo()
                     view.status = when (state) {
                         AepConnectionState.CONNECTING -> "Starting…"
                         AepConnectionState.CONNECTED -> "Scan the code with Ambo Companion"
@@ -118,6 +117,15 @@ class MainActivity : Activity() {
         tvHost.start()
     }
 
+    private fun letGo() {
+        if (drawing) engine.end()
+        drawing = false
+        hadPen = false
+        penSide = null
+        hands.reset()
+        zoom.end()
+    }
+
     /**
      * One display frame: consume the freshest input, then draw.
      *
@@ -134,88 +142,103 @@ class MainActivity : Activity() {
         val frame = latestHandFrame.getAndSet(null) ?: return
         val aspect = engine.viewport.aspect
         val input = hands.read(frame, aspect)
-        val now = System.currentTimeMillis()
         view.tracking = input.tracked
+        view.cursors = cursorsFor(input)
+        logInput(input)
 
-        val leftPinching = hands.isPinching(AepHandHandedness.LEFT)
-        val rightPinching = hands.isPinching(AepHandHandedness.RIGHT)
+        val left = input.left
+        val right = input.right
+        val bothPinching = left != null && right != null &&
+            hands.isPinching(AepHandHandedness.LEFT) && hands.isPinching(AepHandHandedness.RIGHT)
 
-        // Before anything else, the app has to know which hand is the pen. Asked once, with the
-        // only input available at that point: a pinch.
-        if (!dominant.isChosen) {
-            if (dominant.observe(leftPinching, rightPinching, hands.isLonePinching)) {
-                view.dominant = dominant.choice
-            }
-            view.cursor = null
-            return
-        }
-
-        val penSide = dominant.choice
-        // hand() falls back to a lone unplaced hand, which is the only hand it could be.
-        val pen = input.hand(penSide)
-        val offHand = input.otherThan(penSide)
-        val penPinching = hands.isPinching(penSide) || (input.unplaced != null && hands.isLonePinching)
-        val offPinching = if (penSide == AepHandHandedness.LEFT) rightPinching else leftPinching
-
-        // The off hand's pinch opens and closes the tools. It is judged on release, so a zoom -
-        // which is both hands pinching - does not open the panel on its way in.
-        if (panel.observeOffHand(offPinching, penPinching)) {
-            if (drawingWithAir) { engine.cancel(); drawingWithAir = false }
-            zoom.end()
-        }
-
-        view.cursor = pen?.let { it.x to it.y }
-
-        if (panel.isOpen) {
-            view.hover = pen?.let { panel.cellAt(it.x, it.y, penSide, aspect) }
-            // Select on the pinch closing rather than while it is held, or a hand resting over a
-            // colour would pick it again on every frame.
-            if (penPinching && !penWasPinching && pen != null) {
-                val taken = panel.select(panel.cellAt(pen.x, pen.y, penSide, aspect), now)
-                if (taken?.kind == ToolPanel.Kind.UNDO) engine.undo()
-                engine.colour = panel.tools.colour
-                engine.baseWidth = panel.tools.width
-            }
-            penWasPinching = penPinching
-            return
-        }
-
-        view.hover = null
-        penWasPinching = penPinching
-
-        // Two pinching hands means zoom, not draw. Checked first, so starting a zoom never leaves
-        // a stray mark where the second hand came in. There must actually be a second hand: one
-        // hand cannot zoom, and treating it as though it could would cancel the stroke instead.
-        val bothPinching = penPinching && offPinching && offHand != null
-        val change = zoom.update(pen, offHand, bothPinching)
-        if (change != null) {
-            if (drawingWithAir) { engine.cancel(); drawingWithAir = false }
-            engine.viewport.zoomAbout(change.focusX, change.focusY, change.scale)
-            engine.viewport.panBy(change.panX, change.panY)
-            return
-        }
+        // Two pinching hands is a zoom, and never a mark. Checked before anything else, so
+        // bringing the second hand in does not leave a stray line behind it.
         if (bothPinching) {
-            if (drawingWithAir) { engine.cancel(); drawingWithAir = false }
+            if (drawing) { engine.cancel(); drawing = false }
+            hadPen = false
+            penSide = null
+            zoom.update(left, right, true)?.let {
+                engine.viewport.zoomAbout(it.focusX, it.focusY, it.scale)
+                engine.viewport.panBy(it.panX, it.panY)
+            }
             return
         }
+        zoom.end()
 
+        val pen = hands.penHand(input)
         if (pen == null) {
-            if (drawingWithAir) { engine.end(); drawingWithAir = false }
+            if (drawing) engine.end()
+            drawing = false
+            hadPen = false
+            penSide = null
             return
         }
 
-        val point = AirDrawPoint(
-            x = engine.viewport.toDocumentX(pen.x * view.width),
-            y = engine.viewport.toDocumentY(pen.y * view.width),
-            pressure = 1f,
-            timeMs = now
-        )
-        when {
-            penPinching && !drawingWithAir -> { engine.begin(StrokeSource.AIR, point); drawingWithAir = true }
-            penPinching -> engine.extend(point)
-            drawingWithAir -> { engine.end(); drawingWithAir = false }
+        // The pen changing hands mid-stroke would otherwise join two separate marks with a line
+        // straight across the picture.
+        if (drawing && penSide != null && pen.handedness != penSide) {
+            engine.end()
+            drawing = false
+            hadPen = false
         }
+
+        if (!hadPen) {
+            hadPen = true
+            penSide = pen.handedness
+            if (strip.contains(pen.x)) {
+                // A pinch that begins on the strip takes what it is over, and draws nothing.
+                val taken = strip.select(strip.cellAt(pen.x, pen.y, aspect))
+                if (taken?.kind == ToolStrip.Kind.UNDO) engine.undo()
+                engine.colour = strip.colour
+            } else {
+                engine.begin(StrokeSource.AIR, pointFor(pen.x, pen.y))
+                drawing = true
+            }
+            return
+        }
+
+        // A stroke that began on the canvas keeps drawing wherever the hand goes, including over
+        // the strip. The strip can take a pinch; it can never take a mark already in progress.
+        if (drawing) engine.extend(pointFor(pen.x, pen.y))
     }
+
+    private fun pointFor(x: Float, y: Float) = AirDrawPoint(
+        x = engine.viewport.toDocumentX(x * view.width),
+        y = engine.viewport.toDocumentY(y * view.width),
+        pressure = 1f,
+        timeMs = System.currentTimeMillis()
+    )
+
+    /** Every visible hand gets a cursor, so "can it see me?" is answerable at a glance. */
+    private fun cursorsFor(input: HandInput): List<AirDrawView.Cursor> = buildList {
+        input.left?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isPinching(AepHandHandedness.LEFT))) }
+        input.right?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isPinching(AepHandHandedness.RIGHT))) }
+        input.unplaced?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isLonePinching)) }
+    }
+
+    /**
+     * Roughly once a second, what the hands are actually doing.
+     *
+     * The pinch thresholds were set before anyone had pinched at a television, and on hardware
+     * they missed pinches that had certainly been made. Tuning them from a second guess would be
+     * no better than the first, so this prints the numbers instead:
+     *
+     *     adb logcat -s AirDraw
+     */
+    private fun logInput(input: HandInput) {
+        if (++frames % 15L != 0L) return
+        Log.d(
+            "AirDraw",
+            "tracked=${input.tracked} hands=${input.handCount}" +
+                " L=${format(hands.lastLeftPinch)} R=${format(hands.lastRightPinch)}" +
+                " pinchL=${hands.isPinching(AepHandHandedness.LEFT)}" +
+                " pinchR=${hands.isPinching(AepHandHandedness.RIGHT)}" +
+                " drawing=$drawing zoom=${zoom.isActive} scale=${"%.2f".format(engine.viewport.scale)}" +
+                " strokes=${engine.drawing.all.size}"
+        )
+    }
+
+    private fun format(value: Float?) = if (value == null) "--" else "%.2f".format(value)
 
     /**
      * Hand frames arrive through the generic path, because AEP wraps only pose and live person

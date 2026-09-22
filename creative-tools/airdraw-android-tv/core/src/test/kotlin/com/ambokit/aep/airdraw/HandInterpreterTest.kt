@@ -112,11 +112,13 @@ class HandInterpreterTest {
 
     @Test
     fun `pinch has hysteresis, per hand`() {
-        val reader = HandInterpreter()
+        // Explicit thresholds: the defaults are provisional and will move once there are numbers
+        // from a real television, and a test of the mechanism should not break when they do.
+        val reader = HandInterpreter(pinchEnter = 0.6f, pinchExit = 0.35f)
         val right = { pinch: Double -> reader.read(frame(hand(AepHandHandedness.RIGHT, 0.8, pinch)), aspect) }
 
         right(0.5)
-        assertFalse(reader.isPinching(AepHandHandedness.RIGHT), "0.5 is below the threshold to start")
+        assertFalse(reader.isPinching(AepHandHandedness.RIGHT), "below the threshold to start")
         right(0.7)
         assertTrue(reader.isPinching(AepHandHandedness.RIGHT))
         // Staying on through the middle is the point: a single threshold on a noisy signal breaks
