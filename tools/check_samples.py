@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -67,7 +68,7 @@ AEP_PLATFORM_PACKAGES = {
 # Working files that must never reach a public reference sample. Not pedantry: these appear
 # whenever someone renames or migrates in place, they are invisible in an editor, and a reader
 # cannot tell a stale .pre-canonical.bak from the file that is actually compiled.
-DEBRIS = ("*.bak", "*.orig", "*.rej", "*.csproj", "*.sln", "*.slnx", "*.user")
+DEBRIS = ("*.bak", "*.bak.meta", "*.orig", "*.rej", "*.csproj", "*.sln", "*.slnx", "*.user")
 
 failures: list[str] = []
 checks = 0
@@ -173,11 +174,30 @@ def check_unity(sample: pathlib.Path, name: str, version: str) -> None:
         ok(name, "Packages/manifest.json pulls no AEP source")
 
 
+def git_ignores(path: pathlib.Path) -> bool:
+    """Whether git would keep this file out of the repository.
+
+    Unity regenerates .csproj and .slnx every time it opens a project, and .gitignore already
+    keeps them unpublished. Reporting those as debris fails this check on any machine that has
+    opened a sample in an editor - a false alarm that teaches people to ignore the check, which
+    costs more than the debris ever would.
+
+    The question this check asks is "would this reach the public repository", and git is the
+    thing that knows the answer. A non-zero exit means not ignored, including the case where
+    this is not a git checkout at all - so outside a clone everything is still reported.
+    """
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "check-ignore", "-q", str(path)],
+        capture_output=True,
+    ).returncode == 0
+
+
 def check_no_debris(sample: pathlib.Path, name: str) -> None:
     found = sorted(
         str(path.relative_to(sample))
         for pattern in DEBRIS
         for path in sample.rglob(pattern)
+        if not git_ignores(path)
     )
     if found:
         shown = ", ".join(found[:6]) + (f" and {len(found) - 6} more" if len(found) > 6 else "")
