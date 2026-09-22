@@ -82,13 +82,15 @@ class HandInterpreter(
     /**
      * How long a pinch survives the hand vanishing.
      *
-     * In that same session the provider lost the hand entirely in thirteen percent of frames -
-     * twelve times in two minutes - and each loss ended the stroke and started a new one. Thirty
-     * nine strokes were recorded for a handful of intended marks. The dropouts are one or two
-     * frames at about 10 Hz, so holding the pinch across 300ms bridges them without holding a pen
-     * down that the player has genuinely let go of.
+     * The provider loses the hand constantly - 13% of frames in one session, 43% in a longer one.
+     * Each loss used to end the stroke and start a new one, which is why thirty-nine strokes were
+     * recorded for a handful of intended marks.
+     *
+     * 300ms covered about three frames at this rate and bridged only 8% of the gaps, so it is
+     * raised. The risk of holding a pen down that has genuinely been let go is covered from the
+     * other side: the caller ends the stroke anyway if the hand reappears somewhere else.
      */
-    private val dropoutGraceMs: Long = 300L,
+    private val dropoutGraceMs: Long = 650L,
     private val minimumConfidence: Float = 0.4f,
     /** Learns which part of the camera frame this person's arms actually cover. */
     val reach: ReachEnvelope = ReachEnvelope()

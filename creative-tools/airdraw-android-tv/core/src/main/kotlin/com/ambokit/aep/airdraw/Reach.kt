@@ -36,7 +36,18 @@ class ReachEnvelope(
     private val fallbackMinX: Float = 0.15f,
     private val fallbackMaxX: Float = 0.85f,
     private val fallbackMinY: Float = 0.10f,
-    private val fallbackMaxY: Float = 0.65f
+    private val fallbackMaxY: Float = 0.65f,
+    /**
+     * How close to the edge of the camera frame the envelope is allowed to grow.
+     *
+     * A session left it at x=0.31..0.96, which put the edge of the canvas within four percent of
+     * the edge of what the camera can see - so touching that edge meant holding a hand half out
+     * of frame, where the tracker loses it and the stroke dies. The envelope was faithfully
+     * learning a reach that does not work.
+     *
+     * Reaching further still works; it simply stops moving the canvas edge out to meet it.
+     */
+    private val safeInset: Float = 0.08f
 ) {
     private var seen = false
     private var minX = 0f
@@ -70,6 +81,12 @@ class ReachEnvelope(
         if (rawX > maxX) maxX += (rawX - maxX) * adaptRate
         if (rawY < minY) minY += (rawY - minY) * adaptRate
         if (rawY > maxY) maxY += (rawY - maxY) * adaptRate
+
+        // Never out to where the tracker cannot see.
+        minX = minX.coerceAtLeast(safeInset)
+        maxX = maxX.coerceAtMost(1f - safeInset)
+        minY = minY.coerceAtLeast(safeInset)
+        maxY = maxY.coerceAtMost(1f - safeInset)
     }
 
     /** @param raw a camera-frame coordinate, 0..1. @return 0..1 across the canvas. */

@@ -146,13 +146,15 @@ class HandInterpreterTest {
 
     @Test
     fun `but a hand that has gone is gone`() {
-        val reader = HandInterpreter()
+        // The grace is stated here rather than taken from the default, which moves as sessions on
+        // real hardware say more about how long the tracker actually goes blind for.
+        val reader = HandInterpreter(dropoutGraceMs = 400L)
         reader.read(frame(hand(AepHandHandedness.RIGHT, 0.8, pinch = 0.9)), aspect, 0L)
 
-        reader.read(AepHandFrame(trackingState = AepTrackingState.LOST, hands = emptyList()), aspect, 100L)
-        assertTrue(reader.isPinching(AepHandHandedness.RIGHT))
-        // Past the grace, it is a person who has put their arm down, and the stroke must end.
-        reader.read(AepHandFrame(trackingState = AepTrackingState.LOST, hands = emptyList()), aspect, 500L)
+        reader.read(AepHandFrame(trackingState = AepTrackingState.LOST, hands = emptyList()), aspect, 200L)
+        assertTrue(reader.isPinching(AepHandHandedness.RIGHT), "still inside the grace")
+        // Past it, this is a person who has put their arm down, and the stroke must end.
+        reader.read(AepHandFrame(trackingState = AepTrackingState.LOST, hands = emptyList()), aspect, 900L)
         assertFalse(reader.isPinching(AepHandHandedness.RIGHT))
         assertFalse(reader.isBridging)
     }

@@ -26,8 +26,18 @@ class AirDrawView(
     private val strip: ToolStrip
 ) : View(context) {
 
-    /** A hand on screen. Pointer space: x across 0..1, y down 0..aspect. */
-    data class Cursor(val x: Float, val y: Float, val pinching: Boolean)
+    /**
+     * A hand on screen. Pointer space: x across 0..1, y down 0..aspect.
+     *
+     * [waiting] means the pen is down but the tracker has lost the hand: the cursor is showing
+     * where it last was, and is drawn hollow to say so.
+     */
+    data class Cursor(
+        val x: Float,
+        val y: Float,
+        val pinching: Boolean,
+        val waiting: Boolean = false
+    )
 
     var status: String = "Starting…"
     var joinUrl: String? = null
@@ -213,6 +223,15 @@ class AirDrawView(
             paint.strokeWidth = radius * 0.22f
             paint.color = strip.colour
             canvas.drawCircle(x, y, radius, paint)
+
+            if (cursor.waiting) {
+                // The pen is down and the hand is gone. Left hollow, and held where it was: the
+                // stroke has not ended, and a cursor that vanished here read as the app quitting.
+                paint.strokeWidth = radius * 0.1f
+                canvas.drawCircle(x, y, radius * 1.5f, paint)
+                continue
+            }
+
             // Filled while the pen is down, so "am I drawing?" is answerable from the sofa.
             paint.style = Paint.Style.FILL
             canvas.drawCircle(x, y, radius * 0.45f, paint)

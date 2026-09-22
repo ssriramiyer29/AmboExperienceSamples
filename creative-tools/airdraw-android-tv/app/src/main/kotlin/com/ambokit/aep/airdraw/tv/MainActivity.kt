@@ -63,7 +63,16 @@ class MainActivity : Activity() {
     private var lastPenX: Float? = null
     private var lastPenY: Float? = null
 
+    // Counted over the interval rather than sampled at the end of it. The previous version
+    // printed the state of one frame in fifteen, which cannot measure how often the tracker
+    // loses the hand or for how long - and those turned out to be the numbers that mattered.
     private var frames = 0L
+    private var framesNoHand = 0L
+    private var framesBridged = 0L
+    private var gapFrames = 0
+    private var longestGap = 0
+    private var strokesStarted = 0
+    private var strokesEnded = 0
 
     /** QR encoding, kept off the thread that has to stay responsive. */
     private val qrWorker = Executors.newSingleThreadExecutor { runnable ->
@@ -219,7 +228,7 @@ class MainActivity : Activity() {
         // Held and visible are different questions. A pinch survives the hand vanishing for a
         // moment; during that moment there is simply nowhere to draw.
         if (!hands.isPenHeld) {
-            if (drawing) engine.end()
+            if (drawing) { engine.end(); strokesEnded++ }
             drawing = false
             hadPen = false
             return
@@ -254,6 +263,7 @@ class MainActivity : Activity() {
             } else {
                 engine.begin(StrokeSource.AIR, pointFor(pen.x, pen.y))
                 drawing = true
+                strokesStarted++
             }
             return
         }
@@ -270,11 +280,22 @@ class MainActivity : Activity() {
         timeMs = System.currentTimeMillis()
     )
 
-    /** Every visible hand gets a cursor, so "can it see me?" is answerable at a glance. */
+    /**
+     * Every visible hand gets a cursor, so "can it see me?" is answerable at a glance.
+     *
+     * And when the pen is held but no hand can be seen, the cursor stays where it last was rather
+     * than vanishing. The pen has not been lifted - the tracker has blinked - and a cursor that
+     * disappears mid-stroke reads as the app giving up, which was reported exactly that way.
+     */
     private fun cursorsFor(input: HandInput): List<AirDrawView.Cursor> = buildList {
         input.left?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isPinching(AepHandHandedness.LEFT))) }
         input.right?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isPinching(AepHandHandedness.RIGHT))) }
         input.unplaced?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isLonePinching)) }
+        if (isEmpty() && hands.isPenHeld) {
+            val x = lastPenX
+            val y = lastPenY
+            if (x != null && y != null) add(AirDrawView.Cursor(x, y, pinching = true, waiting = true))
+        }
     }
 
     /**
@@ -287,19 +308,38 @@ class MainActivity : Activity() {
      *     adb logcat -s AirDraw
      */
     private fun logInput(input: HandInput) {
-        if (++frames % 15L != 0L) return
+        frames++
+        if (input.tracked) {
+            longestGap = maxOf(longestGap, gapFrames)
+            gapFrames = 0
+        } else {
+            framesNoHand++
+            gapFrames++
+        }
+        if (hands.isBridging) framesBridged++
+
+        if (frames % INTERVAL != 0L) return
+        longestGap = maxOf(longestGap, gapFrames)
+        val lostPct = 100.0 * framesNoHand / INTERVAL
         Log.d(
             "AirDraw",
-            "tracked=${input.tracked} hands=${input.handCount}" +
+            "over ${INTERVAL} frames: lost=${"%.0f".format(lostPct)}%" +
+                " longestGap=${longestGap}f" +
+                " bridged=${"%.0f".format(100.0 * framesBridged / INTERVAL)}%" +
+                " strokes=+$strokesStarted/-$strokesEnded" +
+                " | now hands=${input.handCount}" +
                 " L=${format(hands.lastLeftPinch)} R=${format(hands.lastRightPinch)}" +
-                " pinchL=${hands.isPinching(AepHandHandedness.LEFT)}" +
-                " pinchR=${hands.isPinching(AepHandHandedness.RIGHT)}" +
-                " bridging=${hands.isBridging}" +
                 " raw=${format(hands.lastRawX)},${format(hands.lastRawY)}" +
                 " reach=[${hands.reach}]" +
-                " drawing=$drawing zoom=${zoom.isActive} scale=${"%.2f".format(engine.viewport.scale)}" +
-                " strokes=${engine.drawing.all.size}"
+                " drawing=$drawing zoom=${zoom.isActive}" +
+                " scale=${"%.2f".format(engine.viewport.scale)}" +
+                " total=${engine.drawing.all.size}"
         )
+        framesNoHand = 0
+        framesBridged = 0
+        longestGap = 0
+        strokesStarted = 0
+        strokesEnded = 0
     }
 
     private fun format(value: Float?) = if (value == null) "--" else "%.2f".format(value)
@@ -313,6 +353,9 @@ class MainActivity : Activity() {
          * starts a new mark instead of ruling a line across the drawing.
          */
         const val REACQUIRE_JUMP = 0.10f
+
+        /** Frames per diagnostic line: about five seconds at the rate hand frames arrive. */
+        const val INTERVAL = 60L
     }
 
     /**
