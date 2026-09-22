@@ -70,25 +70,51 @@ data class HandInput(
 class HandInterpreter(
     private val mirrorX: Boolean = true,
     /**
-     * Provisional, and known to be provisional.
+     * Measured, at last.
      *
-     * 0.6 was a guess made before anyone had pinched at a television, and on hardware it missed
-     * pinches the player had certainly made. These are lowered as an interim; the numbers that
-     * replace them should come from the diagnostics, not from another guess.
+     * From a logged session on a television: a pinch the player is deliberately holding reads a
+     * median of 0.72 and dips as low as 0.36; an open hand reads a median of 0.00 and reaches
+     * 0.35 at its ninetieth percentile. The two barely overlap, so entering at 0.50 and leaving
+     * at 0.22 sits in the gap with room on both sides.
      */
-    private val pinchEnter: Float = 0.5f,
-    private val pinchExit: Float = 0.28f,
-    private val minimumConfidence: Float = 0.4f
+    private val pinchEnter: Float = 0.50f,
+    private val pinchExit: Float = 0.22f,
+    /**
+     * How long a pinch survives the hand vanishing.
+     *
+     * In that same session the provider lost the hand entirely in thirteen percent of frames -
+     * twelve times in two minutes - and each loss ended the stroke and started a new one. Thirty
+     * nine strokes were recorded for a handful of intended marks. The dropouts are one or two
+     * frames at about 10 Hz, so holding the pinch across 300ms bridges them without holding a pen
+     * down that the player has genuinely let go of.
+     */
+    private val dropoutGraceMs: Long = 300L,
+    private val minimumConfidence: Float = 0.4f,
+    /** The part of the camera frame that maps onto the canvas. See [remap]. */
+    private val activeMinX: Float = 0.10f,
+    private val activeMaxX: Float = 0.90f,
+    private val activeMinY: Float = 0.08f,
+    private val activeMaxY: Float = 0.78f
 ) {
+    /** The last raw camera-frame position, before mirroring and remapping, for diagnostics. */
+    var lastRawX: Float? = null
+        private set
+    var lastRawY: Float? = null
+        private set
+
     /** The pinch strengths seen this frame, for diagnostics. Null where no hand was there. */
     var lastLeftPinch: Float? = null
         private set
     var lastRightPinch: Float? = null
         private set
 
-    private val leftPinch = PinchLatch(pinchEnter, pinchExit)
-    private val rightPinch = PinchLatch(pinchEnter, pinchExit)
-    private val lonePinch = PinchLatch(pinchEnter, pinchExit)
+    private val leftPinch = PinchLatch(pinchEnter, pinchExit, dropoutGraceMs)
+    private val rightPinch = PinchLatch(pinchEnter, pinchExit, dropoutGraceMs)
+    private val lonePinch = PinchLatch(pinchEnter, pinchExit, dropoutGraceMs)
+
+    /** True while any pinch is being held open across a dropout rather than actually seen. */
+    val isBridging: Boolean
+        get() = leftPinch.bridging || rightPinch.bridging || lonePinch.bridging
 
     /** True while that hand is pinched, after hysteresis. */
     fun isPinching(which: AepHandHandedness?): Boolean = when (which) {
@@ -124,28 +150,32 @@ class HandInterpreter(
         else -> null
     }
 
-    fun read(frame: AepHandFrame?, aspect: Float): HandInput {
-        if (frame == null || frame.trackingState == AepTrackingState.LOST) {
-            reset()
-            return HandInput(tracked = false, left = null, right = null)
-        }
+    /**
+     * Whether a pen is being held, whether or not a hand is visible this frame.
+     *
+     * Separate from [penHand] because during a dropout the pen is still down and there is simply
+     * nowhere to draw. The caller holds the stroke open and adds no points, rather than ending it.
+     */
+    val isPenHeld: Boolean
+        get() = lonePinch.on || (leftPinch.on != rightPinch.on)
 
-        val pointers = resolveSides(frame.hands.mapNotNull { toPointer(it, aspect) })
-        if (pointers.isEmpty()) {
-            reset()
-            return HandInput(tracked = false, left = null, right = null)
-        }
+    fun read(frame: AepHandFrame?, aspect: Float, nowMs: Long): HandInput {
+        // A lost frame is not a reset. The provider drops the hand for a frame or two several
+        // times a minute, and tearing everything down on each blink is what turned a handful of
+        // drawn marks into thirty-nine strokes.
+        val hands = if (frame == null || frame.trackingState == AepTrackingState.LOST) emptyList()
+        else resolveSides(frame.hands.mapNotNull { toPointer(it, aspect) })
 
-        val left = pointers.firstOrNull { it.handedness == AepHandHandedness.LEFT }
-        val right = pointers.firstOrNull { it.handedness == AepHandHandedness.RIGHT }
-        val unplaced = pointers.firstOrNull { it.handedness == AepHandHandedness.UNKNOWN }
-        leftPinch.update(left?.pinch)
-        rightPinch.update(right?.pinch)
-        lonePinch.update(unplaced?.pinch)
+        val left = hands.firstOrNull { it.handedness == AepHandHandedness.LEFT }
+        val right = hands.firstOrNull { it.handedness == AepHandHandedness.RIGHT }
+        val unplaced = hands.firstOrNull { it.handedness == AepHandHandedness.UNKNOWN }
+        leftPinch.update(left?.pinch, nowMs)
+        rightPinch.update(right?.pinch, nowMs)
+        lonePinch.update(unplaced?.pinch, nowMs)
         lastLeftPinch = left?.pinch
         lastRightPinch = (right ?: unplaced)?.pinch
 
-        return HandInput(tracked = true, left = left, right = right, unplaced = unplaced)
+        return HandInput(tracked = hands.isNotEmpty(), left = left, right = right, unplaced = unplaced)
     }
 
     /**
@@ -173,17 +203,54 @@ class HandInterpreter(
         }
     }
 
-    /** Pinch detection with hysteresis, per hand. */
-    private class PinchLatch(private val enter: Float, private val exit: Float) {
+    /**
+     * Pinch detection with hysteresis, and with a hand that keeps disappearing.
+     *
+     * Hysteresis alone assumes the signal is continuous. This one is not: the provider loses the
+     * hand outright for a frame or two, several times a minute, and a latch that believes every
+     * gap chops a drawn line into pieces. A gap shorter than the grace is treated as the tracker
+     * blinking rather than as the player letting go.
+     */
+    private class PinchLatch(
+        private val enter: Float,
+        private val exit: Float,
+        private val graceMs: Long
+    ) {
         var on = false
             private set
 
-        fun update(strength: Float?) {
-            if (strength == null) { on = false; return }
-            on = if (on) strength > exit else strength >= enter
+        /** True while [on] is being sustained by the grace rather than by a reading. */
+        var bridging = false
+            private set
+
+        private var lastSeenOnMs = Long.MIN_VALUE
+
+        fun update(strength: Float?, nowMs: Long) {
+            if (strength == null) {
+                // The hand is not there at all. Hold on if it was pinching a moment ago.
+                if (on && nowMs - lastSeenOnMs <= graceMs) { bridging = true; return }
+                on = false
+                bridging = false
+                return
+            }
+            val held = if (on) strength > exit else strength >= enter
+            if (held) {
+                on = true
+                bridging = false
+                lastSeenOnMs = nowMs
+                return
+            }
+            // Seen, and open. A reading below the exit threshold is the player letting go, and is
+            // believed immediately - the grace is for absence, not for disagreement.
+            on = false
+            bridging = false
         }
 
-        fun reset() { on = false }
+        fun reset() {
+            on = false
+            bridging = false
+            lastSeenOnMs = Long.MIN_VALUE
+        }
     }
 
     private fun toPointer(hand: AepHand, aspect: Float): HandPointer? {
@@ -194,15 +261,34 @@ class HandInterpreter(
 
         val rawX = ((thumb.first + index.first) * 0.5f)
         val rawY = ((thumb.second + index.second) * 0.5f)
+        lastRawX = rawX
+        lastRawY = rawY
+
+        val mirrored = if (mirrorX) 1f - rawX else rawX
         return HandPointer(
             handedness = hand.handedness,
-            x = if (mirrorX) 1f - rawX else rawX,
+            x = remap(mirrored, activeMinX, activeMaxX),
             // The provider normalises y over the camera frame; the canvas is 0..aspect.
-            y = rawY * aspect,
+            y = remap(rawY, activeMinY, activeMaxY) * aspect,
             pinch = (hand.pinchStrength ?: 0.0).toFloat(),
             confidence = hand.confidence.toFloat()
         )
     }
+
+    /**
+     * Stretch the comfortable part of the camera frame across the whole canvas.
+     *
+     * Without this, reaching the bottom of the screen means putting your hand at the bottom of
+     * what the camera can see - which is somewhere around your knees, and was reported as the
+     * bottom of the canvas and the lower half of the tool strip being hard to get to. Mapping a
+     * sub-rectangle onto the full canvas means the corners are reachable from a position someone
+     * can hold.
+     *
+     * The bounds are a first cut and the diagnostics print the raw values, so they can be set
+     * from where hands actually go rather than from where it seems like they would.
+     */
+    private fun remap(value: Float, min: Float, max: Float): Float =
+        ((value - min) / (max - min)).coerceIn(0f, 1f)
 
     private fun landmark(hand: AepHand, name: String): Pair<Float, Float>? {
         // Landmarks are positional and may carry nulls where a joint was not seen, which is why

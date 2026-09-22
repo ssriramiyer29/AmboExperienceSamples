@@ -25,9 +25,10 @@ is a platform that supports one capability.
 
 ## The hard part is 15 Hz
 
-Hand tracking arrives at roughly **15 Hz**, where a mouse reports at 60–125. A hand crossing a
-1.1 m TV at drawing speed moves about 6 cm between samples. Joining those points with straight
-lines gives a visible polygon, which is worse than the mouse it is meant to beat.
+Hand tracking arrives at **10.5 Hz** — measured on a television, against the 15 the design
+assumed — where a mouse reports at 60–125. A hand crossing a 1.1 m TV at drawing speed moves the
+better part of 10 cm between samples. Joining those points with straight lines gives a visible
+polygon, which is worse than the mouse it is meant to beat.
 
 So the interesting part of AirDraw is not the gesture. It is `core/`:
 
@@ -38,6 +39,9 @@ So the interesting part of AirDraw is not the gesture. It is `core/`:
   at the jitter body pose actually has, and costs up to 25 px of lag. It starts paying above
   roughly 16 px of jitter, so `StrokeSmoothing.forJitter()` decides from a measurement.
 - **Width from speed**, so a fast stroke tapers and a slow one bears down.
+- **Pinch thresholds taken from a real session**, not from a guess: a held pinch reads a median of
+  0.72 and dips to 0.36, an open hand reads 0.00 and reaches 0.35, so the latch enters at 0.50 and
+  leaves at 0.22.
 
 All of it is arithmetic with no renderer in it, which is both what ADR-0001 rule 2 requires and
 what lets the part that makes the product good be tested without a TV.
@@ -108,21 +112,32 @@ While tuning, the app prints what it sees roughly once a second:
 
 ```bash
 adb logcat -s AirDraw
-# tracked=true hands=2 L=0.31 R=0.78 pinchL=false pinchR=true drawing=true zoom=false scale=1.00 strokes=4
+# tracked=true hands=2 L=0.31 R=0.78 pinchL=false pinchR=true bridging=false
+#   raw=0.52,0.41 drawing=true zoom=false scale=1.00 strokes=4
 ```
+
+`L` and `R` are pinch strengths, `bridging` means a pinch is being held across a dropout, and
+`raw` is the hand's position in the camera frame before it is mapped onto the canvas — which is
+what the active-area bounds should be set from.
 
 ## Known limits
 
-**The pinch thresholds are provisional and known to be.** 0.6 to enter was a number picked before
-anyone had pinched at a television, and on hardware it missed pinches that had certainly been
-made. They are lowered to 0.5 and 0.28 as an interim. The numbers that replace them should come
-from the diagnostics above, not from another guess.
+**The provider loses the hand, often.** In a logged session it reported no hands at all in 13% of
+frames — a dozen dropouts in two minutes. That, not the pinch threshold, is what used to chop a
+drawn line into pieces: thirty-nine strokes were recorded for a handful of intended marks. A pinch
+now survives 300 ms of absence, and a hand that reappears more than a tenth of a screen away
+starts a new stroke rather than ruling a line across the drawing. The dropouts themselves are the
+Companion's to fix.
 
-**Hand tracking at three metres is only half proven.** The strokes themselves came out natural on
-a real television at real distance, which was the claim that could have failed. What is still
-unmeasured is the landmark jitter the band edges in `StrokeSmoothing.forJitter()` were guessed
-from, and the pinch strength the thresholds above were guessed from. Everything that felt wrong on
-first contact was control, not rendering.
+**The active area is a first cut.** The comfortable part of the camera frame is stretched across
+the canvas, because reaching the bottom of the screen otherwise meant putting a hand at the bottom
+of what the camera sees, somewhere around the knees. The bounds are guesses; the diagnostics print
+raw camera positions so they can be set from where hands actually go.
+
+**Hand tracking at three metres is half proven.** The strokes came out natural on a real
+television at real distance, which was the claim that could have failed. What is still unmeasured
+is the landmark jitter the band edges in `StrokeSmoothing.forJitter()` were guessed from.
+Everything that felt wrong on first contact was control, not rendering.
 
 **Nothing is saved.** `Drawing` keeps strokes as data and can undo, redo and restore, but nothing
 writes them anywhere. A drawing lives as long as the app does.

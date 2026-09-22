@@ -21,6 +21,7 @@ import com.ambokit.aep.host.AepPayloadJson
 import com.ambokit.aep.host.ambokit.EmbeddedAndroidAmboKitHost
 import com.ambokit.aep.host.tv.AndroidTvExperienceHost
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.hypot
 
 /**
  * AirDraw: the TV is the canvas and your hand in the air is the pen.
@@ -57,8 +58,9 @@ class MainActivity : Activity() {
     /** Whether a pen was present last frame, so a pinch is acted on once rather than every frame. */
     private var hadPen = false
 
-    /** Which hand holds the pen, so a stroke does not silently transfer to the other one. */
-    private var penSide: AepHandHandedness? = null
+    /** Where the pen was last seen, so a stroke is not bridged across a jump. */
+    private var lastPenX: Float? = null
+    private var lastPenY: Float? = null
 
     private var frames = 0L
 
@@ -90,7 +92,10 @@ class MainActivity : Activity() {
                     view.connection = state
                     // A phone that has gone away is not still pinching. Without this the stroke
                     // in progress stays open and joins up with whatever is drawn next.
-                    if (state != AepConnectionState.CONNECTED) letGo()
+                    if (state != AepConnectionState.CONNECTED) {
+                        letGo()
+                        view.streaming = false
+                    }
                     view.status = when (state) {
                         AepConnectionState.CONNECTING -> "Starting…"
                         AepConnectionState.CONNECTED -> "Scan the code with Ambo Companion"
@@ -121,7 +126,8 @@ class MainActivity : Activity() {
         if (drawing) engine.end()
         drawing = false
         hadPen = false
-        penSide = null
+        lastPenX = null
+        lastPenY = null
         hands.reset()
         zoom.end()
     }
@@ -141,11 +147,21 @@ class MainActivity : Activity() {
     private fun consumeHands() {
         val frame = latestHandFrame.getAndSet(null) ?: return
         val aspect = engine.viewport.aspect
-        val input = hands.read(frame, aspect)
+        val now = System.currentTimeMillis()
+        val input = hands.read(frame, aspect, now)
         view.tracking = input.tracked
         view.cursors = cursorsFor(input)
-        logInput(input)
+        try {
+            route(input, aspect, now)
+        } finally {
+            // Logged after the decisions, not before. Logging first printed the previous frame's
+            // verdict beside this frame's readings, which is a confusing thing to hand someone
+            // who is trying to work out why a stroke ended.
+            logInput(input)
+        }
+    }
 
+    private fun route(input: HandInput, aspect: Float, now: Long) {
         val left = input.left
         val right = input.right
         val bothPinching = left != null && right != null &&
@@ -156,7 +172,6 @@ class MainActivity : Activity() {
         if (bothPinching) {
             if (drawing) { engine.cancel(); drawing = false }
             hadPen = false
-            penSide = null
             zoom.update(left, right, true)?.let {
                 engine.viewport.zoomAbout(it.focusX, it.focusY, it.scale)
                 engine.viewport.panBy(it.panX, it.panY)
@@ -165,26 +180,36 @@ class MainActivity : Activity() {
         }
         zoom.end()
 
-        val pen = hands.penHand(input)
-        if (pen == null) {
+        // Held and visible are different questions. A pinch survives the hand vanishing for a
+        // moment; during that moment there is simply nowhere to draw.
+        if (!hands.isPenHeld) {
             if (drawing) engine.end()
             drawing = false
             hadPen = false
-            penSide = null
             return
         }
 
-        // The pen changing hands mid-stroke would otherwise join two separate marks with a line
-        // straight across the picture.
-        if (drawing && penSide != null && pen.handedness != penSide) {
+        val pen = hands.penHand(input)
+        if (pen == null) {
+            // The tracker blinked. Hold the stroke open and add nothing to it - the alternative
+            // is ending a line the player is still drawing, several times a minute.
+            return
+        }
+
+        // The hand came back somewhere else entirely. Bridging that would draw a straight line
+        // across the picture, which is worse than the seam it was meant to avoid.
+        if (drawing && lastPenX != null && lastPenY != null &&
+            hypot(pen.x - lastPenX!!, pen.y - lastPenY!!) > REACQUIRE_JUMP
+        ) {
             engine.end()
             drawing = false
             hadPen = false
         }
+        lastPenX = pen.x
+        lastPenY = pen.y
 
         if (!hadPen) {
             hadPen = true
-            penSide = pen.handedness
             if (strip.contains(pen.x)) {
                 // A pinch that begins on the strip takes what it is over, and draws nothing.
                 val taken = strip.select(strip.cellAt(pen.x, pen.y, aspect))
@@ -233,12 +258,25 @@ class MainActivity : Activity() {
                 " L=${format(hands.lastLeftPinch)} R=${format(hands.lastRightPinch)}" +
                 " pinchL=${hands.isPinching(AepHandHandedness.LEFT)}" +
                 " pinchR=${hands.isPinching(AepHandHandedness.RIGHT)}" +
+                " bridging=${hands.isBridging}" +
+                " raw=${format(hands.lastRawX)},${format(hands.lastRawY)}" +
                 " drawing=$drawing zoom=${zoom.isActive} scale=${"%.2f".format(engine.viewport.scale)}" +
                 " strokes=${engine.drawing.all.size}"
         )
     }
 
     private fun format(value: Float?) = if (value == null) "--" else "%.2f".format(value)
+
+    private companion object {
+        /**
+         * How far the pen may move while the tracker is blinking and still be the same stroke.
+         *
+         * In pointer units, so a tenth of the screen's width. Far enough to cover a hand that
+         * kept moving through a dropout, short enough that a hand reacquired somewhere else
+         * starts a new mark instead of ruling a line across the drawing.
+         */
+        const val REACQUIRE_JUMP = 0.10f
+    }
 
     /**
      * Hand frames arrive through the generic path, because AEP wraps only pose and live person
@@ -248,6 +286,7 @@ class MainActivity : Activity() {
      */
     private fun onCapabilityEvent(event: AepCapabilityEvent) {
         if (event.capability != "camera.hand") return
+        if (!view.streaming) runOnUiThread { view.streaming = true }
         val payload = AepPayloadJson.decode(event.payloadJson) ?: return
         AepHandFrame.fromMap(payload)?.let { latestHandFrame.set(it) }
     }

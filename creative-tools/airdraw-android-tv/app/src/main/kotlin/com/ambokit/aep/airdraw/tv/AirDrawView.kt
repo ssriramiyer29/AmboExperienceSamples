@@ -43,6 +43,9 @@ class AirDrawView(
      */
     var cursors: List<Cursor> = emptyList()
 
+    /** True once capability payloads are arriving - the phone is connected and sending. */
+    var streaming: Boolean = false
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -78,7 +81,9 @@ class AirDrawView(
         canvas.drawColor(PAPER)
 
         drawStrokes(canvas)
-        if (!tracking && engine.drawing.isEmpty) drawJoinPanel(canvas, w, h)
+        if (!tracking && engine.drawing.isEmpty) {
+            if (streaming) drawWaitingForHands(canvas, w, h) else drawJoinPanel(canvas, w, h)
+        }
         drawToolStrip(canvas, w)
         drawCursors(canvas)
         drawConnectionBanner(canvas, w, h)
@@ -183,6 +188,13 @@ class AirDrawView(
         }
     }
 
+    /**
+     * The pinching hand gets a pen; any other hand gets a faint dot.
+     *
+     * Both were drawn the same size at first, and a resting hand the camera happened to see read
+     * as a second pen - the player had to physically hide their other hand to make the screen
+     * make sense. A hand that is not drawing still deserves to be acknowledged, but quietly.
+     */
     private fun drawCursors(canvas: Canvas) {
         val radius = min(width, height) * 0.018f
         for (cursor in cursors) {
@@ -190,18 +202,41 @@ class AirDrawView(
             val x = cursor.x * width
             val y = cursor.y * width
 
+            if (!cursor.pinching) {
+                paint.style = Paint.Style.FILL
+                paint.color = IDLE_HAND
+                canvas.drawCircle(x, y, radius * 0.28f, paint)
+                continue
+            }
+
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = radius * 0.22f
-            paint.color = if (cursor.pinching) strip.colour else MUTED
+            paint.color = strip.colour
             canvas.drawCircle(x, y, radius, paint)
-
             // Filled while the pen is down, so "am I drawing?" is answerable from the sofa.
-            if (cursor.pinching) {
-                paint.style = Paint.Style.FILL
-                canvas.drawCircle(x, y, radius * 0.45f, paint)
-            }
+            paint.style = Paint.Style.FILL
+            canvas.drawCircle(x, y, radius * 0.45f, paint)
         }
         paint.style = Paint.Style.FILL
+    }
+
+    /**
+     * The gap between scanning and drawing.
+     *
+     * It takes the Companion several seconds to grant the camera, open it and load the model, and
+     * for that whole time the old screen showed a stale QR code - so the player scans, nothing
+     * happens, and the reasonable conclusion is that the scan failed. Saying what is being waited
+     * for costs one line and removes the doubt.
+     */
+    private fun drawWaitingForHands(canvas: Canvas, w: Float, h: Float) {
+        paint.color = INK
+        paint.textAlign = Paint.Align.CENTER
+        paint.textSize = h * 0.045f
+        canvas.drawText("AirDraw", w / 2f, h * 0.44f, paint)
+
+        paint.color = MUTED
+        paint.textSize = h * 0.028f
+        canvas.drawText("Phone connected — hold up your hand", w / 2f, h * 0.52f, paint)
     }
 
     private fun drawJoinPanel(canvas: Canvas, w: Float, h: Float) {
@@ -266,5 +301,6 @@ class AirDrawView(
         const val INK = 0xFF111827.toInt()
         const val MUTED = 0xFF6B7280.toInt()
         const val SCRIM = 0xE6111827.toInt()
+        const val IDLE_HAND = 0x33111827
     }
 }
