@@ -38,6 +38,24 @@ jobs:
       - name: Check every sample
         run: python3 tools/check_samples.py
 
+      # AEP-04. Each sample's experience.json is validated against the canonical AEP schema:
+      # its capability ids must be ones AmboKit publishes, and it must agree with the code
+      # beside it. This is what caught RockDodge shipping as com.ambokit.aep.rockdodge on
+      # Android and reference.rockdodge on Unity - one game, two ids, in anything that counts
+      # them - which nothing here could see while capabilities were merely written down in
+      # sample.json and read by no one.
+      #
+      # The validator and the schema are vendored from the AEP repository, beside the binaries
+      # and for the same reason: that repository is private and a public CI run cannot check it
+      # out. Vendored rather than rewritten, because two hand-written validators drifting apart
+      # is precisely the defect this check exists to catch.
+      - name: Experience manifests agree with their code
+        run: |
+          python3 tools/check_manifests.py \
+            --root . \
+            --schema tools/aep-experience-manifest-v1.schema.json \
+            --catalogue tools/capability-catalogue.json
+
   build:
     name: Build every buildable sample from its own binaries
     runs-on: ubuntu-latest

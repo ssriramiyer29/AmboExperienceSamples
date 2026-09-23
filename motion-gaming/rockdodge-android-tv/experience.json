@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.ambokit.aep.rockdodge",
+  "name": "RockDodge",
+  "description": "Dodge falling rocks by stepping left and right. Pose is the controller.",
+  "renderers": ["android-tv"],
+  "requiresCalibration": true,
+  "capabilities": {
+    "required": ["camera.pose"],
+    "optional": ["livevideo.person"]
+  },
+  "aep": { "minimumVersion": "0.7.0" }
+}

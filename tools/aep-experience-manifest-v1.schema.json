@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aep-experience-manifest-v1.schema.json",
+  "title": "aep.experience.manifest@1",
+  "description": "What an experience is and what it needs, declared where something other than the running app can read it. The $id is deliberately relative: AEP publishes no schema host, and writing one here would claim a URL that does not resolve.",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "renderers", "capabilities", "aep"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "description": "The version of this manifest format. A consumer that does not recognise it must refuse the manifest rather than guess at it.",
+      "const": 1
+    },
+    "id": {
+      "description": "The experience's canonical id, and the same string the code passes to AepExperienceDefinition on every renderer. RockDodge shipped as com.ambokit.aep.rockdodge on Android and reference.rockdodge on Unity, which makes one experience into two in anything that counts them.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9-]+)+$",
+      "minLength": 3
+    },
+    "name": {
+      "description": "What a person sees. Not an identifier.",
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "description": "One or two sentences. Optional.",
+      "type": "string"
+    },
+    "renderers": {
+      "description": "The renderers this experience ships on. A manifest is per experience, not per renderer: the same experience on two renderers is one entry naming both.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["android-tv", "unity"] }
+    },
+    "requiresCalibration": {
+      "description": "Whether the player must be calibrated before the experience runs (ADR-0002). Mirrors AepExperienceDefinition.requiresCalibration; defaults to true there and here.",
+      "type": "boolean"
+    },
+    "capabilities": {
+      "description": "What the experience needs from the participant. Ids are AmboKit's, reused exactly, and may be written bare or versioned (see AepCapabilityId).",
+      "type": "object",
+      "required": ["required"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "description": "Without these the experience cannot run and should not be offered. May be empty: an experience that needs nothing from the phone is a legitimate experience.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/capabilityId" }
+        },
+        "optional": {
+          "description": "The experience runs without these and is better with them. This is the declaration AEP had no way to make: RockDodge degrades gracefully without livevideo.person and nothing anywhere said so, so nothing could tell a person whether a missing camera meant 'worse' or 'not at all'.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/capabilityId" }
+        }
+      }
+    },
+    "aep": {
+      "description": "What this experience needs from the platform itself.",
+      "type": "object",
+      "required": ["minimumVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "minimumVersion": {
+          "description": "The oldest AEP release this experience runs against. This cannot be expressed in code - a build compiled against a newer AEP cannot tell you it would have failed against an older one - so AirDraw's dependency on 0.8.0 lived only in a source comment until this field existed.",
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "capabilityId": {
+      "description": "An AmboKit capability id: <domain>.<capability>, optionally @<major>. Both spellings are legal and name the same capability.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*\\.[a-zA-Z][a-zA-Z0-9]*(@[1-9][0-9]*)?$"
+    }
+  }
+}

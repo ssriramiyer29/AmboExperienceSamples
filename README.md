@@ -22,10 +22,16 @@ motion-gaming/
 **Domains appear when a sample fills them.** There is no scaffold of empty folders waiting
 to be populated — an empty domain advertises a sample that does not exist.
 
-Every sample declares itself in a `sample.json` at its root — renderer, AEP version,
-capabilities, and where its renderer-free rules live. Discovery and CI key on that file rather
-than inferring anything from build systems, so a sample cannot be checked in one renderer's
-shape and silently skipped in another's. See [docs/ADDING_A_SAMPLE.md](docs/ADDING_A_SAMPLE.md).
+Every sample declares itself twice, in two files that answer different questions. `sample.json`
+says what this repository needs to know — renderer, which AEP binaries are vendored here, where
+the renderer-free rules live. `experience.json` is the canonical AEP experience manifest: the
+experience's id, what it requires, what it merely prefers, and the oldest AEP it runs against.
+CI validates the manifest against the AEP schema and against the code in the same directory, so
+a declaration cannot drift away from what the sample actually does.
+
+Discovery and CI key on these files rather than inferring anything from build systems, so a
+sample cannot be checked in one renderer's shape and silently skipped in another's. See
+[docs/ADDING_A_SAMPLE.md](docs/ADDING_A_SAMPLE.md).
 
 ## Each sample carries its own binaries
 

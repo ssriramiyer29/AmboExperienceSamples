@@ -2,7 +2,6 @@
   "name": "rockdodge-android-tv",
   "renderer": "android-tv",
   "aepVersion": "0.7.0",
-  "capabilities": ["camera.pose@1", "livevideo.person@1"],
   "experienceRules": "core/src/main/kotlin",
   "description": "Dodge falling rocks by stepping left and right. Pose is the controller."
 }
