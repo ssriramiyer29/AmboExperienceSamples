@@ -340,6 +340,33 @@ def check_experience_rules(sample: pathlib.Path, name: str, declared: object) ->
         ok(name, "experience rules are renderer-independent")
 
 
+def check_declares_its_experience(sample: pathlib.Path, name: str, declaration: dict) -> None:
+    """Every sample carries an experience.json, and declares its capabilities only there.
+
+    `sample.json` used to list `capabilities` as well. Nothing read it - not this script, not
+    CI, not a build - so it was a declaration whose only possible state was "still true by
+    luck". It said `camera.pose@1` while the code beside it asked for `camera.pose`, and both
+    versions of RockDodge said the same thing while their code did not.
+
+    Capabilities now live in `experience.json`, which `check_manifests.py` validates against
+    the AEP schema and, more usefully, against the code in the same directory. `sample.json`
+    keeps what is genuinely about *this repository* - which binaries are vendored here, where
+    the renderer-free rules are - and says nothing about the experience itself.
+    """
+    manifest = sample / "experience.json"
+    if not manifest.is_file():
+        fail(name, "no experience.json - every sample declares what it needs where something "
+                   "other than the running app can read it (AEP-04)")
+        return
+    ok(name, "declares an experience.json")
+
+    if "capabilities" in declaration:
+        fail(name, "sample.json declares capabilities; they belong in experience.json, where "
+                   "they are checked against the code rather than merely written down")
+    else:
+        ok(name, "declares its capabilities once, in experience.json")
+
+
 def main() -> int:
     samples, undeclared = find_samples()
 
@@ -387,6 +414,7 @@ def main() -> int:
             fail(name, f"unknown renderer {renderer!r} - this check has no rules for it")
 
         check_no_debris(sample, name)
+        check_declares_its_experience(sample, name, declaration)
         check_experience_rules(sample, name, declaration["experienceRules"])
         print()
 

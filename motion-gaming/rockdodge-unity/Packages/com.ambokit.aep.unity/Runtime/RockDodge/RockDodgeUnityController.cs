@@ -65,7 +65,7 @@ namespace AmboKit.AEP.RockDodge
                 adapter=new AepUnityAmboKitAdapter(EmbeddedGateway);
                 session=await Aep.StartAsync(
                     new AepExperienceDefinition(
-                        "reference.rockdodge",
+                        "com.ambokit.aep.rockdodge",
                         new[]{"camera.pose@1","livevideo.person@1"},
                         requiresCalibration:true),
                     adapter);

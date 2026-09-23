@@ -1,7 +1,21 @@
 # Adding a sample
 
-Every sample declares itself in a `sample.json` at its root. Discovery, checks and CI all key on
-that file, and nothing infers a sample's identity from its build system.
+Every sample carries **two** declarations at its root, and they answer different questions.
+
+| | |
+|---|---|
+| `sample.json` | what this **repository** needs to know: which binaries are vendored here, where the renderer-free rules live. |
+| `experience.json` | what the **platform** needs to know: the experience's id, what it requires, what it merely prefers, and the oldest AEP it runs against. It is the canonical AEP experience manifest, and the same file an experience carries anywhere. |
+
+Keep a fact in one of them, never both. `sample.json` used to list `capabilities` too, and
+nothing read it — not the checks, not CI, not a build — so it was true only by luck, and it had
+stopped being true: it said `camera.pose@1` where the code asked for `camera.pose`, and both
+RockDodge samples agreed with each other while disagreeing with their own code. Capabilities
+now live in `experience.json`, where `tools/check_manifests.py` holds them against the source in
+the same directory.
+
+Discovery, checks and CI key on these files, and nothing infers a sample's identity from its
+build system.
 
 That is deliberate. An earlier version of the checks looked for `settings.gradle.kts`, which
 meant a Unity sample — having no such file — would have been **skipped in silence**. A skipped
@@ -15,7 +29,6 @@ project and carries no `sample.json` now fails rather than being ignored.
   "name": "rockdodge-unity",
   "renderer": "unity",
   "aepVersion": "0.7.0",
-  "capabilities": ["camera.pose@1", "livevideo.person@1"],
   "experienceRules": "Assets/RockDodge/Runtime/Core",
   "description": "The Unity build of RockDodge. Same game, same AEP, different renderer."
 }
@@ -25,13 +38,62 @@ project and carries no `sample.json` now fails rather than being ignored.
 |---|---|
 | `name` | directory name |
 | `renderer` | `android-tv` or `unity` |
-| `aepVersion` | which AEP this sample is built against |
-| `capabilities` | what it requests, with versions |
+| `aepVersion` | which AEP binaries are **vendored in this directory** |
 | `experienceRules` | path to the renderer-free rules, **or `null`** |
 | `description` | one line |
 
 `experienceRules` is required but may be `null`. A sample with no renderer-free rules has to say
 so on purpose — the alternative is a check that finds nothing to look at and reports success.
+
+`aepVersion` and `experience.json`'s `aep.minimumVersion` are not the same number and are not
+meant to be. One says which binaries sit in this folder; the other says the oldest release the
+experience would run against at all.
+
+## `experience.json`
+
+The canonical AEP experience manifest. Its schema is
+`tools/aep-experience-manifest-v1.schema.json`, vendored from the AEP repository beside the
+binaries and for the same reason.
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.ambokit.aep.rockdodge",
+  "name": "RockDodge",
+  "description": "Dodge falling rocks by stepping left and right. Pose is the controller.",
+  "renderers": ["unity"],
+  "requiresCalibration": true,
+  "capabilities": {
+    "required": ["camera.pose"],
+    "optional": ["livevideo.person"]
+  },
+  "aep": { "minimumVersion": "0.7.0" }
+}
+```
+
+| Field | |
+|---|---|
+| `id` | lower-case reverse-DNS, and **the same string the code passes to `AepExperienceDefinition`** |
+| `renderers` | which renderers this build targets |
+| `requiresCalibration` | mirrors `AepExperienceDefinition.requiresCalibration` |
+| `capabilities.required` | without these the experience cannot run |
+| `capabilities.optional` | it runs without these and is better with them |
+| `aep.minimumVersion` | the oldest AEP release it runs against |
+
+Three rules the checks enforce, each because it was broken:
+
+- **One experience, one id.** RockDodge shipped as `com.ambokit.aep.rockdodge` on Android and
+  `reference.rockdodge` on Unity, which makes one game into two in anything that counts them.
+  Two manifests sharing an id must now agree on everything but `renderers`.
+- **The manifest must match the code beside it.** A different id, a required capability the code
+  never asks for, or a capability the code asks for that the manifest omits all fail. A manifest
+  that lies is worse than none, because it is believed.
+- **Capability ids are AmboKit's.** Every id is checked against the vendored catalogue, so
+  `camera.hands` fails here rather than arriving at runtime as `not_advertised` — which reads
+  like a missing sensor rather than a typo.
+
+Both spellings are legal: `camera.pose` and `camera.pose@1` are the same capability, and the
+checks compare by name.
 
 ## Layout by renderer
 
