@@ -9,13 +9,12 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.view.View
 import com.ambokit.aep.airdraw.AirDrawEngine
-import com.ambokit.aep.airdraw.ToolPanel
+import com.ambokit.aep.airdraw.ToolStrip
 import com.ambokit.aep.core.AepConnectionState
-import com.ambokit.aep.core.capabilities.AepHandHandedness
 import kotlin.math.min
 
 /**
- * The canvas, and nothing else.
+ * The canvas, and the strip down its edge.
  *
  * Every decision about what a line looks like was made in `airdraw-core`: this walks the points
  * it hands back and puts them on a Canvas. That split is ADR-0001 rule 2, and it is also why the
@@ -24,8 +23,21 @@ import kotlin.math.min
 class AirDrawView(
     context: Context,
     private val engine: AirDrawEngine,
-    private val panel: ToolPanel
+    private val strip: ToolStrip
 ) : View(context) {
+
+    /**
+     * A hand on screen. Pointer space: x across 0..1, y down 0..aspect.
+     *
+     * [waiting] means the pen is down but the tracker has lost the hand: the cursor is showing
+     * where it last was, and is drawn hollow to say so.
+     */
+    data class Cursor(
+        val x: Float,
+        val y: Float,
+        val pinching: Boolean,
+        val waiting: Boolean = false
+    )
 
     var status: String = "Starting…"
     var joinUrl: String? = null
@@ -33,21 +45,16 @@ class AirDrawView(
     var connection: AepConnectionState = AepConnectionState.CONNECTING
     var tracking: Boolean = false
 
-    /** Null until the player has said which hand they draw with. */
-    var dominant: AepHandHandedness? = null
-
-    /** The cell the drawing hand is over, while the panel is open. */
-    var hover: ToolPanel.Cell? = null
-
     /**
-     * Where the drawing hand is, in pointer space - x across 0..1, y down 0..aspect - or null
-     * when no hand is visible.
+     * Every visible hand, not only the one drawing.
      *
-     * Pointer space, not document space: the cursor follows the hand, and the hand does not move
-     * when the canvas is zoomed. Putting it through the viewport made it drift away from the
-     * hand at any zoom other than 1, where the two spaces happen to coincide.
+     * Two cursors is the honest picture, and it answers the question a player actually has when
+     * nothing is happening - can it see me? - without them having to guess.
      */
-    var cursor: Pair<Float, Float>? = null
+    var cursors: List<Cursor> = emptyList()
+
+    /** True once capability payloads are arriving - the phone is connected and sending. */
+    var streaming: Boolean = false
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -84,98 +91,59 @@ class AirDrawView(
         canvas.drawColor(PAPER)
 
         drawStrokes(canvas)
-        if (!tracking && engine.drawing.isEmpty) drawJoinPanel(canvas, w, h)
-        if (tracking && dominant == null) drawHandPrompt(canvas, w, h)
-        drawCursor(canvas)
-        if (panel.isOpen) drawToolPanel(canvas, w, h)
-        else if (panel.tools.isFlashing(System.currentTimeMillis())) drawCurrentTool(canvas, w, h)
+        if (!tracking && engine.drawing.isEmpty) {
+            if (streaming) drawWaitingForHands(canvas, w, h) else drawJoinPanel(canvas, w, h)
+        }
+        drawToolStrip(canvas, w)
+        drawCursors(canvas)
         drawConnectionBanner(canvas, w, h)
     }
 
     /**
-     * The one question AirDraw asks, and it asks it once.
+     * The palette, permanently.
      *
-     * There is no menu because there is nothing to drive a menu with yet: hands are the only
-     * input, and this is the first thing that happens. A pinch is the answer and the tutorial at
-     * the same time - whoever pinches has just learned how to draw.
+     * Six percent of the width, and the canvas is the rest. An earlier version hid this behind a
+     * gesture and saved the space; what it cost was a player stuck on a colour they had not
+     * chosen, with the gesture that would have released them not firing. Space is cheaper.
      */
-    private fun drawHandPrompt(canvas: Canvas, w: Float, h: Float) {
-        paint.style = Paint.Style.FILL
-        paint.color = SCRIM
-        val top = h * 0.36f
-        val bottom = h * 0.64f
-        canvas.drawRect(0f, top, w, bottom, paint)
-
-        paint.color = Color.WHITE
-        paint.textAlign = Paint.Align.CENTER
-        paint.textSize = h * 0.052f
-        canvas.drawText("Pinch with the hand you draw with", w / 2f, h * 0.49f, paint)
-
-        paint.color = 0xFFB9C0CC.toInt()
-        paint.textSize = h * 0.024f
-        canvas.drawText("Your other hand opens the tools", w / 2f, h * 0.565f, paint)
-    }
-
-    /**
-     * The tool strip, on the drawing hand's side.
-     *
-     * Laid out in `airdraw-core` and only painted here, so the targets the player reaches for and
-     * the targets the hit test uses are the same list by construction. Two sources of truth for
-     * where a button is would mean a button that looks like it is somewhere it is not.
-     */
-    private fun drawToolPanel(canvas: Canvas, w: Float, h: Float) {
-        val cells = panel.cells(dominant, engine.viewport.aspect)
+    private fun drawToolStrip(canvas: Canvas, w: Float) {
+        val cells = strip.cells(engine.viewport.aspect)
         if (cells.isEmpty()) return
-        val scale = w // pointer space is normalised on width, for x and y alike
 
-        val strip = RectF(
-            cells.first().left * scale,
-            cells.first().top * scale - h * 0.02f,
-            cells.first().right * scale,
-            cells.last().bottom * scale + h * 0.02f
+        val panel = RectF(
+            cells.first().left * w,
+            cells.first().top * w,
+            cells.first().right * w,
+            cells.last().bottom * w
         )
         paint.style = Paint.Style.FILL
         paint.color = SCRIM
-        canvas.drawRoundRect(strip, strip.width() * 0.22f, strip.width() * 0.22f, paint)
+        canvas.drawRoundRect(panel, panel.width() * 0.3f, panel.width() * 0.3f, paint)
 
         for (cell in cells) {
-            val cx = cell.centreX * scale
-            val cy = cell.centreY * scale
-            val size = cell.height * scale
-
-            if (cell == hover) {
-                // The hand is over this one. Shown as a filled plate rather than an outline,
-                // because an outline at three metres is the first thing to disappear.
-                paint.color = HOVER
-                canvas.drawRoundRect(
-                    RectF(strip.left + size * 0.08f, cy - size * 0.46f, strip.right - size * 0.08f, cy + size * 0.46f),
-                    size * 0.3f, size * 0.3f, paint
-                )
-            }
+            val cx = cell.centreX * w
+            val cy = cell.centreY * w
+            val size = cell.height * w
 
             when (cell.kind) {
-                ToolPanel.Kind.COLOUR -> {
-                    paint.color = panel.tools.colours[cell.index]
-                    canvas.drawCircle(cx, cy, size * 0.3f, paint)
-                    if (cell.index == panel.tools.colourIndex) drawSelectionRing(canvas, cx, cy, size * 0.4f)
+                ToolStrip.Kind.COLOUR -> {
+                    paint.style = Paint.Style.FILL
+                    paint.color = strip.colours[cell.index]
+                    canvas.drawCircle(cx, cy, size * 0.32f, paint)
+                    if (cell.index == strip.colourIndex) {
+                        // A ring, not a tick. At three metres a mark drawn on top of a swatch is
+                        // the first thing to disappear.
+                        paint.style = Paint.Style.STROKE
+                        paint.strokeWidth = size * 0.07f
+                        paint.color = Color.WHITE
+                        canvas.drawCircle(cx, cy, size * 0.42f, paint)
+                        paint.style = Paint.Style.FILL
+                    }
                 }
-                ToolPanel.Kind.WIDTH -> {
-                    // Drawn as what they are: a dot at the size the pen will be.
-                    paint.color = if (cell.index == panel.tools.widthIndex) Color.WHITE else INACTIVE
-                    canvas.drawCircle(cx, cy, size * (0.1f + 0.07f * cell.index), paint)
-                    if (cell.index == panel.tools.widthIndex) drawSelectionRing(canvas, cx, cy, size * 0.4f)
-                }
-                ToolPanel.Kind.UNDO -> drawUndoGlyph(canvas, cx, cy, size * 0.3f)
+                ToolStrip.Kind.UNDO -> drawUndoGlyph(canvas, cx, cy, size * 0.3f)
+                ToolStrip.Kind.FLIP -> drawFlipGlyph(canvas, cx, cy, size * 0.28f)
             }
         }
-    }
-
-    private fun drawSelectionRing(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = radius * 0.18f
-        paint.color = Color.WHITE
-        canvas.drawCircle(cx, cy, radius, paint)
-        paint.style = Paint.Style.FILL
     }
 
     /** An arrow curling back on itself - drawn rather than typed, so no font has to have it. */
@@ -187,32 +155,28 @@ class AirDrawView(
         canvas.drawArc(RectF(cx - radius, cy - radius, cx + radius, cy + radius), 20f, 280f, false, paint)
 
         paint.style = Paint.Style.FILL
-        val head = Path().apply {
+        canvas.drawPath(Path().apply {
             moveTo(cx + radius * 0.95f, cy + radius * 0.20f)
             lineTo(cx + radius * 0.35f, cy + radius * 0.50f)
             lineTo(cx + radius * 1.15f, cy + radius * 0.80f)
             close()
-        }
-        canvas.drawPath(head, paint)
+        }, paint)
     }
 
-    /**
-     * What the pen is now, for a moment after the panel closes.
-     *
-     * Selecting puts the strip away, and without this the player's confirmation vanishes with it.
-     */
-    private fun drawCurrentTool(canvas: Canvas, w: Float, h: Float) {
-        val radius = h * 0.028f
-        val x = if (dominant == AepHandHandedness.LEFT) w * 0.06f else w * 0.94f
-        val y = h * 0.09f
-
+    /** Two arrowheads pointing apart: move this strip to the other side. */
+    private fun drawFlipGlyph(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
         paint.style = Paint.Style.FILL
-        paint.color = SCRIM
-        canvas.drawCircle(x, y, radius * 1.7f, paint)
-        paint.color = panel.tools.colour
-        canvas.drawCircle(x, y, radius, paint)
-        paint.color = Color.WHITE
-        canvas.drawCircle(x, y + radius * 0.02f, radius * (0.12f + 0.08f * panel.tools.widthIndex), paint)
+        paint.color = 0xFFB9C0CC.toInt()
+        canvas.drawPath(Path().apply {
+            moveTo(cx - radius, cy)
+            lineTo(cx - radius * 0.2f, cy - radius * 0.6f)
+            lineTo(cx - radius * 0.2f, cy + radius * 0.6f)
+            close()
+            moveTo(cx + radius, cy)
+            lineTo(cx + radius * 0.2f, cy - radius * 0.6f)
+            lineTo(cx + radius * 0.2f, cy + radius * 0.6f)
+            close()
+        }, paint)
     }
 
     private fun drawStrokes(canvas: Canvas) {
@@ -234,26 +198,87 @@ class AirDrawView(
         }
     }
 
-    private fun drawCursor(canvas: Canvas) {
-        val (pointerX, pointerY) = cursor ?: return
-        // Both axes are normalised on width, which is why y is scaled by it too.
-        val x = pointerX * width
-        val y = pointerY * width
-        val radius = min(width, height) * 0.018f
+    /**
+     * The pinching hand gets a pen; any other hand gets a faint dot.
+     *
+     * Both were drawn the same size at first, and a resting hand the camera happened to see read
+     * as a second pen - the player had to physically hide their other hand to make the screen
+     * make sense. A hand that is not drawing still deserves to be acknowledged, but quietly.
+     */
+    /**
+     * The pinching hand gets a pen; any other hand gets a quieter ring.
+     *
+     * Sized for a television rather than for a monitor. The first version drew the idle hand as a
+     * small dot at twenty percent opacity on near-white paper, which from three metres away is
+     * indistinguishable from nothing - reported, accurately, as losing the pointer.
+     *
+     * Every cursor carries a white halo under it. The pen takes the current colour, and the
+     * current colour can be the near-black one, or the amber one over a yellow stroke: without
+     * something behind it, the cursor disappears exactly when the canvas gets busy.
+     */
+    private fun drawCursors(canvas: Canvas) {
+        val radius = min(width, height) * 0.026f
+        for (cursor in cursors) {
+            // Both axes are normalised on width, which is why y is scaled by it too.
+            val x = cursor.x * width
+            val y = cursor.y * width
 
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = radius * 0.22f
-        paint.color = panel.tools.colour
-        canvas.drawCircle(x, y, radius, paint)
+            if (!cursor.pinching) {
+                halo(canvas, x, y, radius * 0.62f, radius * 0.2f)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = radius * 0.2f
+                paint.color = IDLE_HAND
+                canvas.drawCircle(x, y, radius * 0.62f, paint)
+                continue
+            }
 
-        // A dot inside the ring while the pen is down, so "am I drawing?" is answerable at a
-        // glance from three metres away.
-        if (engine.inProgress.isNotEmpty()) {
+            halo(canvas, x, y, radius, radius * 0.26f)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = radius * 0.26f
+            paint.color = strip.colour
+            canvas.drawCircle(x, y, radius, paint)
+
+            if (cursor.waiting) {
+                // The pen is down and the hand is gone. Held where it last was, with an outer
+                // ring to say the app is waiting rather than drawing - a cursor that vanished
+                // here read as the app quitting.
+                paint.strokeWidth = radius * 0.12f
+                canvas.drawCircle(x, y, radius * 1.6f, paint)
+                continue
+            }
+
+            // Filled while the pen is down, so "am I drawing?" is answerable from the sofa.
             paint.style = Paint.Style.FILL
-            paint.color = panel.tools.colour
-            canvas.drawCircle(x, y, radius * 0.45f, paint)
+            canvas.drawCircle(x, y, radius * 0.42f, paint)
         }
         paint.style = Paint.Style.FILL
+    }
+
+    /** A white ring under a cursor, so it survives whatever it is drawn over. */
+    private fun halo(canvas: Canvas, x: Float, y: Float, radius: Float, weight: Float) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = weight * 2.1f
+        paint.color = Color.WHITE
+        canvas.drawCircle(x, y, radius, paint)
+    }
+
+    /**
+     * The gap between scanning and drawing.
+     *
+     * It takes the Companion several seconds to grant the camera, open it and load the model, and
+     * for that whole time the old screen showed a stale QR code - so the player scans, nothing
+     * happens, and the reasonable conclusion is that the scan failed. Saying what is being waited
+     * for costs one line and removes the doubt.
+     */
+    private fun drawWaitingForHands(canvas: Canvas, w: Float, h: Float) {
+        paint.color = INK
+        paint.textAlign = Paint.Align.CENTER
+        paint.textSize = h * 0.045f
+        canvas.drawText("AirDraw", w / 2f, h * 0.44f, paint)
+
+        paint.color = MUTED
+        paint.textSize = h * 0.028f
+        canvas.drawText("Phone connected — hold up your hand", w / 2f, h * 0.52f, paint)
     }
 
     private fun drawJoinPanel(canvas: Canvas, w: Float, h: Float) {
@@ -284,7 +309,7 @@ class AirDrawView(
 
         paint.color = INK
         paint.textSize = h * 0.022f
-        canvas.drawText("Pinch to draw · two hands to zoom · other hand opens the tools", w / 2f, h * 0.88f, paint)
+        canvas.drawText("Pinch to draw · pinch on the strip to pick · two hands to zoom", w / 2f, h * 0.88f, paint)
     }
 
     /**
@@ -318,7 +343,6 @@ class AirDrawView(
         const val INK = 0xFF111827.toInt()
         const val MUTED = 0xFF6B7280.toInt()
         const val SCRIM = 0xE6111827.toInt()
-        const val INACTIVE = 0x66FFFFFF
-        const val HOVER = 0x33FFFFFF
+        const val IDLE_HAND = 0xAA4B5563.toInt()
     }
 }

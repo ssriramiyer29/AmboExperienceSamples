@@ -2,13 +2,14 @@ package com.ambokit.aep.airdraw.tv
 
 import android.app.Activity
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import com.ambokit.aep.airdraw.AirDrawEngine
 import com.ambokit.aep.airdraw.AirDrawPoint
-import com.ambokit.aep.airdraw.DominantHand
+import com.ambokit.aep.airdraw.HandInput
 import com.ambokit.aep.airdraw.HandInterpreter
 import com.ambokit.aep.airdraw.StrokeSource
-import com.ambokit.aep.airdraw.ToolPanel
+import com.ambokit.aep.airdraw.ToolStrip
 import com.ambokit.aep.airdraw.ZoomGesture
 import com.ambokit.aep.core.Aep
 import com.ambokit.aep.core.AepCapabilityEvent
@@ -19,14 +20,16 @@ import com.ambokit.aep.core.capabilities.AepHandHandedness
 import com.ambokit.aep.host.AepPayloadJson
 import com.ambokit.aep.host.ambokit.EmbeddedAndroidAmboKitHost
 import com.ambokit.aep.host.tv.AndroidTvExperienceHost
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.hypot
 
 /**
  * AirDraw: the TV is the canvas and your hand in the air is the pen.
  *
- * One capability, `camera.hand`, and two hands with different jobs. The drawing hand - the one
- * the player pinches with when asked, at the start - is the pen. The other hand opens and closes
- * the tool panel, and then the pen reaches over and picks from it.
+ * One capability, `camera.hand`. Whichever hand pinches is the pen - there is nothing to set up
+ * and nothing to choose. The palette is a strip down one edge that is always there, and a pinch
+ * that begins inside it takes what it is over.
  *
  * Neither the drawing rules nor the gesture interpretation live here. This class owns the screen,
  * the session and the frame clock, and nothing else - ADR-0001 rule 2. Everything that decides
@@ -42,8 +45,7 @@ class MainActivity : Activity() {
     private val engine = AirDrawEngine()
     private val hands = HandInterpreter()
     private val zoom = ZoomGesture()
-    private val panel = ToolPanel()
-    private val dominant = DominantHand()
+    private val strip = ToolStrip()
 
     /**
      * Hand frames are conflated before they reach the UI thread, exactly as RockDodge conflates
@@ -52,19 +54,43 @@ class MainActivity : Activity() {
      */
     private val latestHandFrame = AtomicReference<AepHandFrame?>(null)
 
-    private var drawingWithAir = false
+    private var drawing = false
 
-    /** Selection happens on the pinch closing, not while it is held. */
-    private var penWasPinching = false
+    /** Whether a pen was present last frame, so a pinch is acted on once rather than every frame. */
+    private var hadPen = false
+
+    /** Where the pen was last seen, so a stroke is not bridged across a jump. */
+    private var lastPenX: Float? = null
+    private var lastPenY: Float? = null
+
+    /** Whether the hand was missing last frame, so the jump guard applies only on its return. */
+    private var penWasMissing = false
+
+    // Counted over the interval rather than sampled at the end of it. The previous version
+    // printed the state of one frame in fifteen, which cannot measure how often the tracker
+    // loses the hand or for how long - and those turned out to be the numbers that mattered.
+    private var frames = 0L
+    private var framesNoHand = 0L
+    private var framesBridged = 0L
+    private var gapFrames = 0
+    private var longestGap = 0
+    private var strokesStarted = 0
+    private var strokesEnded = 0
+
+    /** QR encoding, kept off the thread that has to stay responsive. */
+    private val qrWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "airdraw-qr").apply { isDaemon = true }
+    }
+
+    private var lastJoinUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        view = AirDrawView(this, engine, panel)
+        view = AirDrawView(this, engine, strip)
         setContentView(view)
-        engine.colour = panel.tools.colour
-        engine.baseWidth = panel.tools.width
+        engine.colour = strip.colour
 
         host = EmbeddedAndroidAmboKitHost()
         session = Aep.start(
@@ -87,10 +113,8 @@ class MainActivity : Activity() {
                     // A phone that has gone away is not still pinching. Without this the stroke
                     // in progress stays open and joins up with whatever is drawn next.
                     if (state != AepConnectionState.CONNECTED) {
-                        if (drawingWithAir) { engine.end(); drawingWithAir = false }
-                        hands.reset()
-                        panel.reset()
-                        penWasPinching = false
+                        letGo()
+                        view.streaming = false
                     }
                     view.status = when (state) {
                         AepConnectionState.CONNECTING -> "Starting…"
@@ -102,13 +126,7 @@ class MainActivity : Activity() {
                     view.invalidate()
                 }
             }
-            live.joinChanged += { join ->
-                runOnUiThread {
-                    view.joinUrl = join.url
-                    view.joinQr = QrCodeBitmap.create(join.url)
-                    view.invalidate()
-                }
-            }
+            live.joinChanged += { join -> onJoinChanged(join.url) }
             live.error += { error ->
                 runOnUiThread { view.status = "${error.code}: ${error.message}"; view.invalidate() }
             }
@@ -116,6 +134,55 @@ class MainActivity : Activity() {
 
         tvHost = AndroidTvExperienceHost(session) { _ -> onFrame() }
         tvHost.start()
+    }
+
+    /**
+     * Put the join URL on screen, and the QR alongside it once it exists.
+     *
+     * Encoding happens on a worker, because doing it on the main thread is what was killing the
+     * app at startup - see [QrCodeBitmap]. The URL appears immediately either way, so a slow
+     * encode degrades to "type this in" rather than to a blank screen.
+     */
+    private fun onJoinChanged(url: String) {
+        runOnUiThread {
+            view.joinUrl = url
+            view.invalidate()
+        }
+        if (url == lastJoinUrl) return
+        lastJoinUrl = url
+        qrWorker.execute {
+            val bitmap = QrCodeBitmap.create(url)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) {
+                    bitmap?.recycle()
+                    return@runOnUiThread
+                }
+                // The join can be reissued, and each reissue used to leave the last megabyte of
+                // bitmap behind it.
+                view.joinQr?.let { if (!it.isRecycled) it.recycle() }
+                view.joinQr = bitmap
+                view.invalidate()
+            }
+        }
+    }
+
+    /** One place where a stroke ends, so the diagnostics can count every one of them. */
+    private fun endStroke() {
+        if (!drawing) return
+        engine.end()
+        strokesEnded++
+        drawing = false
+        hadPen = false
+    }
+
+    private fun letGo() {
+        endStroke()
+        drawing = false
+        hadPen = false
+        lastPenX = null
+        lastPenY = null
+        hands.reset()
+        zoom.end()
     }
 
     /**
@@ -133,88 +200,188 @@ class MainActivity : Activity() {
     private fun consumeHands() {
         val frame = latestHandFrame.getAndSet(null) ?: return
         val aspect = engine.viewport.aspect
-        val input = hands.read(frame, aspect)
         val now = System.currentTimeMillis()
+        // The envelope only grows while the pen is up, or the mapping would shift under
+        // the line being drawn.
+        val input = hands.read(frame, aspect, now, learningReach = !drawing)
         view.tracking = input.tracked
-
-        val leftPinching = hands.isPinching(AepHandHandedness.LEFT)
-        val rightPinching = hands.isPinching(AepHandHandedness.RIGHT)
-
-        // Before anything else, the app has to know which hand is the pen. Asked once, with the
-        // only input available at that point: a pinch.
-        if (!dominant.isChosen) {
-            if (dominant.observe(leftPinching, rightPinching, hands.isLonePinching)) {
-                view.dominant = dominant.choice
-            }
-            view.cursor = null
-            return
+        view.cursors = cursorsFor(input)
+        try {
+            route(input, aspect, now)
+        } finally {
+            // Logged after the decisions, not before. Logging first printed the previous frame's
+            // verdict beside this frame's readings, which is a confusing thing to hand someone
+            // who is trying to work out why a stroke ended.
+            logInput(input)
         }
+    }
 
-        val penSide = dominant.choice
-        // hand() falls back to a lone unplaced hand, which is the only hand it could be.
-        val pen = input.hand(penSide)
-        val offHand = input.otherThan(penSide)
-        val penPinching = hands.isPinching(penSide) || (input.unplaced != null && hands.isLonePinching)
-        val offPinching = if (penSide == AepHandHandedness.LEFT) rightPinching else leftPinching
+    private fun route(input: HandInput, aspect: Float, now: Long) {
+        val left = input.left
+        val right = input.right
+        // Both hands actually seen pinching. A bridged latch is not a second hand for zooming:
+        // there is nothing on screen to measure a separation against.
+        val bothPinching = left != null && right != null &&
+            hands.isSeenPinching(AepHandHandedness.LEFT) && hands.isSeenPinching(AepHandHandedness.RIGHT)
 
-        // The off hand's pinch opens and closes the tools. It is judged on release, so a zoom -
-        // which is both hands pinching - does not open the panel on its way in.
-        if (panel.observeOffHand(offPinching, penPinching)) {
-            if (drawingWithAir) { engine.cancel(); drawingWithAir = false }
-            zoom.end()
-        }
-
-        view.cursor = pen?.let { it.x to it.y }
-
-        if (panel.isOpen) {
-            view.hover = pen?.let { panel.cellAt(it.x, it.y, penSide, aspect) }
-            // Select on the pinch closing rather than while it is held, or a hand resting over a
-            // colour would pick it again on every frame.
-            if (penPinching && !penWasPinching && pen != null) {
-                val taken = panel.select(panel.cellAt(pen.x, pen.y, penSide, aspect), now)
-                if (taken?.kind == ToolPanel.Kind.UNDO) engine.undo()
-                engine.colour = panel.tools.colour
-                engine.baseWidth = panel.tools.width
-            }
-            penWasPinching = penPinching
-            return
-        }
-
-        view.hover = null
-        penWasPinching = penPinching
-
-        // Two pinching hands means zoom, not draw. Checked first, so starting a zoom never leaves
-        // a stray mark where the second hand came in. There must actually be a second hand: one
-        // hand cannot zoom, and treating it as though it could would cancel the stroke instead.
-        val bothPinching = penPinching && offPinching && offHand != null
-        val change = zoom.update(pen, offHand, bothPinching)
-        if (change != null) {
-            if (drawingWithAir) { engine.cancel(); drawingWithAir = false }
-            engine.viewport.zoomAbout(change.focusX, change.focusY, change.scale)
-            engine.viewport.panBy(change.panX, change.panY)
-            return
-        }
+        // Two pinching hands is a zoom, and never a mark. Checked before anything else, so
+        // bringing the second hand in does not leave a stray line behind it.
         if (bothPinching) {
-            if (drawingWithAir) { engine.cancel(); drawingWithAir = false }
+            if (drawing) { engine.cancel(); drawing = false }
+            hadPen = false
+            zoom.update(left, right, true)?.let {
+                engine.viewport.zoomAbout(it.focusX, it.focusY, it.scale)
+                engine.viewport.panBy(it.panX, it.panY)
+            }
             return
         }
 
+        // Both pinches still held, but a hand has blinked out: hold the gesture rather than
+        // ending it. Two hands are seen together rarely enough that abandoning a zoom at the
+        // first missing frame means never completing one.
+        val bothHeld = hands.isPinching(AepHandHandedness.LEFT) && hands.isPinching(AepHandHandedness.RIGHT)
+        if (bothHeld && zoom.isActive) return
+
+        zoom.end()
+
+        // Held and visible are different questions. A pinch survives the hand vanishing for a
+        // moment; during that moment there is simply nowhere to draw.
+        if (!hands.isPenHeld) {
+            endStroke()
+            hadPen = false
+            return
+        }
+
+        val pen = hands.penHand(input)
         if (pen == null) {
-            if (drawingWithAir) { engine.end(); drawingWithAir = false }
+            // The tracker blinked. Hold the stroke open and add nothing to it - the alternative
+            // is ending a line the player is still drawing, several times a minute.
+            penWasMissing = true
             return
         }
 
-        val point = AirDrawPoint(
-            x = engine.viewport.toDocumentX(pen.x * view.width),
-            y = engine.viewport.toDocumentY(pen.y * view.width),
-            pressure = 1f,
-            timeMs = now
-        )
-        when {
-            penPinching && !drawingWithAir -> { engine.begin(StrokeSource.AIR, point); drawingWithAir = true }
-            penPinching -> engine.extend(point)
-            drawingWithAir -> { engine.end(); drawingWithAir = false }
+        // The hand came back somewhere else entirely. Bridging that would draw a straight line
+        // across the picture, which is worse than the seam it was meant to avoid.
+        //
+        // Only on the frame the hand comes back, which is the fix for a bug this check created:
+        // applied every frame, it chopped fast strokes. At 11 Hz a hand crossing half the screen
+        // in half a second moves nearly a tenth of it between frames, so drawing quickly tripped
+        // the guard over and over - eleven strokes in five seconds, in an interval where nothing
+        // was lost at all.
+        if (penWasMissing && drawing) {
+            val fromX = lastPenX
+            val fromY = lastPenY
+            if (fromX != null && fromY != null && hypot(pen.x - fromX, pen.y - fromY) > REACQUIRE_JUMP) {
+                endStroke()
+            }
         }
+        penWasMissing = false
+        lastPenX = pen.x
+        lastPenY = pen.y
+
+        if (!hadPen) {
+            hadPen = true
+            if (strip.contains(pen.x)) {
+                // A pinch that begins on the strip takes what it is over, and draws nothing.
+                val taken = strip.select(strip.cellAt(pen.x, pen.y, aspect))
+                if (taken?.kind == ToolStrip.Kind.UNDO) engine.undo()
+                engine.colour = strip.colour
+            } else {
+                engine.begin(StrokeSource.AIR, pointFor(pen.x, pen.y))
+                drawing = true
+                strokesStarted++
+            }
+            return
+        }
+
+        // A stroke that began on the canvas keeps drawing wherever the hand goes, including over
+        // the strip. The strip can take a pinch; it can never take a mark already in progress.
+        if (drawing) engine.extend(pointFor(pen.x, pen.y))
+    }
+
+    private fun pointFor(x: Float, y: Float) = AirDrawPoint(
+        x = engine.viewport.toDocumentX(x * view.width),
+        y = engine.viewport.toDocumentY(y * view.width),
+        pressure = 1f,
+        timeMs = System.currentTimeMillis()
+    )
+
+    /**
+     * Every visible hand gets a cursor, so "can it see me?" is answerable at a glance.
+     *
+     * And when the pen is held but no hand can be seen, the cursor stays where it last was rather
+     * than vanishing. The pen has not been lifted - the tracker has blinked - and a cursor that
+     * disappears mid-stroke reads as the app giving up, which was reported exactly that way.
+     */
+    private fun cursorsFor(input: HandInput): List<AirDrawView.Cursor> = buildList {
+        input.left?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isPinching(AepHandHandedness.LEFT))) }
+        input.right?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isPinching(AepHandHandedness.RIGHT))) }
+        input.unplaced?.let { add(AirDrawView.Cursor(it.x, it.y, hands.isLonePinching)) }
+        if (isEmpty() && hands.isPenHeld) {
+            val x = lastPenX
+            val y = lastPenY
+            if (x != null && y != null) add(AirDrawView.Cursor(x, y, pinching = true, waiting = true))
+        }
+    }
+
+    /**
+     * Roughly once a second, what the hands are actually doing.
+     *
+     * The pinch thresholds were set before anyone had pinched at a television, and on hardware
+     * they missed pinches that had certainly been made. Tuning them from a second guess would be
+     * no better than the first, so this prints the numbers instead:
+     *
+     *     adb logcat -s AirDraw
+     */
+    private fun logInput(input: HandInput) {
+        frames++
+        if (input.tracked) {
+            longestGap = maxOf(longestGap, gapFrames)
+            gapFrames = 0
+        } else {
+            framesNoHand++
+            gapFrames++
+        }
+        if (hands.isBridging) framesBridged++
+
+        if (frames % INTERVAL != 0L) return
+        longestGap = maxOf(longestGap, gapFrames)
+        val lostPct = 100.0 * framesNoHand / INTERVAL
+        Log.d(
+            "AirDraw",
+            "over ${INTERVAL} frames: lost=${"%.0f".format(lostPct)}%" +
+                " longestGap=${longestGap}f" +
+                " bridged=${"%.0f".format(100.0 * framesBridged / INTERVAL)}%" +
+                " strokes=+$strokesStarted/-$strokesEnded" +
+                " | now hands=${input.handCount}" +
+                " L=${format(hands.lastLeftPinch)} R=${format(hands.lastRightPinch)}" +
+                " raw=${format(hands.lastRawX)},${format(hands.lastRawY)}" +
+                " reach=[${hands.reach}]" +
+                " drawing=$drawing zoom=${zoom.isActive}" +
+                " scale=${"%.2f".format(engine.viewport.scale)}" +
+                " total=${engine.drawing.all.size}"
+        )
+        framesNoHand = 0
+        framesBridged = 0
+        longestGap = 0
+        strokesStarted = 0
+        strokesEnded = 0
+    }
+
+    private fun format(value: Float?) = if (value == null) "--" else "%.2f".format(value)
+
+    private companion object {
+        /**
+         * How far the pen may move while the tracker is blinking and still be the same stroke.
+         *
+         * In pointer units, so a tenth of the screen's width. Far enough to cover a hand that
+         * kept moving through a dropout, short enough that a hand reacquired somewhere else
+         * starts a new mark instead of ruling a line across the drawing.
+         */
+        const val REACQUIRE_JUMP = 0.10f
+
+        /** Frames per diagnostic line: about five seconds at the rate hand frames arrive. */
+        const val INTERVAL = 60L
     }
 
     /**
@@ -225,6 +392,7 @@ class MainActivity : Activity() {
      */
     private fun onCapabilityEvent(event: AepCapabilityEvent) {
         if (event.capability != "camera.hand") return
+        if (!view.streaming) runOnUiThread { view.streaming = true }
         val payload = AepPayloadJson.decode(event.payloadJson) ?: return
         AepHandFrame.fromMap(payload)?.let { latestHandFrame.set(it) }
     }
@@ -241,6 +409,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         if (::tvHost.isInitialized) tvHost.stop()
+        qrWorker.shutdownNow()
         view.recycleBitmaps()
         super.onDestroy()
     }
