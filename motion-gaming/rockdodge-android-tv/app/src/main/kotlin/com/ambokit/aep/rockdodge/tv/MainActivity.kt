@@ -210,6 +210,23 @@ class MainActivity : Activity(), AepHostListener, PlayerActionListener {
             else -> Unit
         }
 
+        // Everything that is not a high-rate frame, logged once.
+        //
+        // The connection axis alone could not explain the first hardware run: a session that was
+        // COMPLETED when the phone went away came back as WAITING_FOR_PLAYER. Both readings of
+        // that contradict a conformance scenario - if the same participant reconnected, 05 says
+        // COMPLETED should have survived; if a new participant joined, 04 says the calibration
+        // should have been discarded, and it was not. Only the participant axis says which
+        // happened, and it was not being recorded.
+        Log.i("AEP", "host: " + when (event) {
+            // The catalogue is thirteen descriptors and would bury everything around it.
+            is AepHostEvent.CapabilityCatalogChanged ->
+                "CapabilityCatalogChanged(${event.participantId}, " +
+                    "${event.descriptors.size} capabilities)"
+            is AepHostEvent.GenericCapability -> "GenericCapability(${event.event.capability})"
+            else -> event.toString()
+        })
+
         runOnUiThread {
             when (event) {
                 is AepHostEvent.JoinChanged -> {
