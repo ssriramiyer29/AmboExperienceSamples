@@ -3,10 +3,12 @@ package com.ambokit.aep.rockdodge.tv
 import android.app.Activity
 import android.util.Log
 import android.os.Bundle
+import android.os.SystemClock
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import android.view.WindowManager
 import com.ambokit.aep.core.*
@@ -37,6 +39,11 @@ class MainActivity : Activity(), AepHostListener, PlayerActionListener {
     private var readyCountdownStartedAtMs = 0L
     private val requiredPoseSyncFrames = 18
     private val readyCountdownMs = 1_500L
+
+    // When the last connection transition arrived, so each one can be logged with the gap since
+    // the one before it. The reconnect path is the thing AepConnectionState was added for and it
+    // is the one thing here that is only ever observed by eye.
+    private val lastConnectionChangeMs = AtomicLong(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,6 +82,20 @@ class MainActivity : Activity(), AepHostListener, PlayerActionListener {
             // way to report it - a sample reaching through the escape hatch hides the gap it is
             // working around. AEP reports the link's health and leaves the response to us.
             it.connectionChanged += { connection ->
+                // Logged here rather than inside runOnUiThread so the timestamp is when the
+                // event arrived, not when the main thread got round to drawing the banner -
+                // which on a television is a difference worth being able to see.
+                //
+                // Until this existed the reconnect sequence left no trace at all. The banner is
+                // drawn and nothing is recorded, so a device pass that failed had nothing to
+                // diagnose from and a device pass that passed produced no numbers. The two gaps
+                // that matter - how long from the phone dropping to the banner, and from the
+                // phone returning to play resuming - are both in here.
+                val now = SystemClock.elapsedRealtime()
+                val previous = lastConnectionChangeMs.getAndSet(now)
+                val gap = if (previous == 0L) "first" else "+${now - previous}ms"
+                Log.i("AEP", "connection: $connection ($gap) state=${it.state} " +
+                    "calibrated=${it.interpreter != null}")
                 runOnUiThread {
                     gameView.connectionState = connection
                     gameView.statusText = when (connection) {
@@ -188,6 +209,23 @@ class MainActivity : Activity(), AepHostListener, PlayerActionListener {
             }
             else -> Unit
         }
+
+        // Everything that is not a high-rate frame, logged once.
+        //
+        // The connection axis alone could not explain the first hardware run: a session that was
+        // COMPLETED when the phone went away came back as WAITING_FOR_PLAYER. Both readings of
+        // that contradict a conformance scenario - if the same participant reconnected, 05 says
+        // COMPLETED should have survived; if a new participant joined, 04 says the calibration
+        // should have been discarded, and it was not. Only the participant axis says which
+        // happened, and it was not being recorded.
+        Log.i("AEP", "host: " + when (event) {
+            // The catalogue is thirteen descriptors and would bury everything around it.
+            is AepHostEvent.CapabilityCatalogChanged ->
+                "CapabilityCatalogChanged(${event.participantId}, " +
+                    "${event.descriptors.size} capabilities)"
+            is AepHostEvent.GenericCapability -> "GenericCapability(${event.event.capability})"
+            else -> event.toString()
+        })
 
         runOnUiThread {
             when (event) {
