@@ -15,6 +15,33 @@ class AirDrawEngine(
 ) {
     var colour: Int = DEFAULT_COLOURS[0]
     var baseWidth: Float = DEFAULT_WIDTHS[1]
+    var brush: BrushType = BrushType.MARKER
+
+    /**
+     * The canvas colour, which is what the eraser paints in.
+     *
+     * Held here rather than read from the renderer because the stroke has to carry a colour at
+     * the moment it is committed, and the drawing rules are the last place that knows what the
+     * pen was doing. It is cream rather than white: painting white erasures onto cream paper
+     * leaves visible smears, which is the whole reason this is a value and not `Color.WHITE`.
+     */
+    var paperColour: Int = DEFAULT_PAPER
+
+    /**
+     * Whether the eraser is selected.
+     *
+     * Erasing paints over in [paperColour] rather than deleting the stroke underneath. Deleting
+     * was the better model on paper and loses to one fact about this app: a wrist-driven stroke is
+     * long and sweeping, so removing the whole stroke a pointer touches would take an entire arm's
+     * sweep away when somebody meant to clean up its corner.
+     *
+     * What it costs: erasures are strokes, so a drawing only grows, and the result is invisible
+     * only while the background stays [paperColour]. What it keeps: partial erasure, undo that
+     * restores the ink by removing the erasure, and no new rendering path. What makes it safe:
+     * erasures are ordinary strokes in the store, so moving later to split-on-erase migrates
+     * nothing - which is why [Stroke.erases] records the intent that the pixels cannot.
+     */
+    var erasing: Boolean = false
 
     /** Set from measured jitter once the app has seen enough frames to measure any. */
     var smoothing: StrokeSmoothing = StrokeSmoothing.NONE
@@ -68,7 +95,17 @@ class AirDrawEngine(
         // One or two samples is a twitch, not a mark. Committing them leaves specks that a child
         // then has to find and undo.
         if (current.size < 3) return false
-        drawing.add(Stroke(colour, baseWidth, activeSource, current.toList()))
+        drawing.add(Stroke(
+            argb = if (erasing) paperColour else colour,
+            baseWidth = baseWidth,
+            source = activeSource,
+            points = current.toList(),
+            // An eraser is always a pen. Speed-varying width would thin the erasure wherever the
+            // arm moved quickly, leaving streaks of the old drawing showing through the middle of
+            // a sweep - which reads as the eraser not working rather than as expression.
+            brush = if (erasing) BrushType.PEN else brush,
+            erases = erasing
+        ))
         return true
     }
 
@@ -95,7 +132,10 @@ class AirDrawEngine(
         for (stroke in strokes) {
             val ready = prepared.getOrPut(stroke) {
                 val curved = StrokePipeline.curve(stroke.points)
-                Prepared(curved, StrokePipeline.widths(curved, stroke.baseWidth, stroke.source))
+                // The stroke's own brush, not the selected one: a drawing is a record of how each
+                // mark was made, and re-rendering old marks with the current pen would rewrite it
+                // every time somebody changed brushes.
+                Prepared(curved, StrokePipeline.widths(curved, stroke.baseWidth, stroke.source, stroke.brush))
             }
             out += toScreen(ready.points, ready.widths, stroke.argb)
         }
@@ -103,7 +143,12 @@ class AirDrawEngine(
         // stroke, and it is the only one whose shape can still change.
         active?.let {
             val curved = StrokePipeline.curve(it)
-            out += toScreen(curved, StrokePipeline.widths(curved, baseWidth, activeSource), colour)
+            val liveBrush = if (erasing) BrushType.PEN else brush
+            out += toScreen(
+                curved,
+                StrokePipeline.widths(curved, baseWidth, activeSource, liveBrush),
+                if (erasing) paperColour else colour
+            )
         }
         if (prepared.size > strokes.size * 2 + 16) prepared.keys.retainAll(strokes.toSet())
         return out
@@ -150,5 +195,15 @@ class AirDrawEngine(
 
         /** In document space, so a stroke is the same weight on any screen. */
         val DEFAULT_WIDTHS = floatArrayOf(0.004f, 0.008f, 0.018f)
+
+        /**
+         * The canvas colour the eraser paints in.
+         *
+         * Cream, not white, and it has to stay in step with the renderer's own paper colour - a
+         * mismatch would make every erasure a faintly visible rectangle of the wrong shade.
+         * `AirDrawViewTest` is not a thing that exists, so the renderer reads this rather than
+         * holding its own copy.
+         */
+        const val DEFAULT_PAPER = 0xFFF8F4EC.toInt()
     }
 }

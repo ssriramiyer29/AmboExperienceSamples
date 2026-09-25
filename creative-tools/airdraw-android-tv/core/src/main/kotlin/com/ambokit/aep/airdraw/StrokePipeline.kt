@@ -74,9 +74,22 @@ object StrokePipeline {
      * Fast strokes thin, slow strokes thick, which is what a brush does — and what makes the
      * residual straightness between samples stop reading as straightness.
      */
-    fun widths(points: List<AirDrawPoint>, baseWidth: Float, source: StrokeSource): FloatArray {
+    fun widths(
+        points: List<AirDrawPoint>,
+        baseWidth: Float,
+        source: StrokeSource,
+        brush: BrushType = BrushType.MARKER
+    ): FloatArray {
         val widths = FloatArray(points.size)
         if (points.isEmpty()) return widths
+
+        // A pen is a pen whatever it is held in: constant width, no speed term, no pressure term.
+        // Returned before the source split because that split exists to decide how to vary width,
+        // and this brush is the one that does not.
+        if (brush == BrushType.PEN) {
+            widths.fill(baseWidth)
+            return widths
+        }
 
         if (source == StrokeSource.TOUCH) {
             for (i in points.indices) {
@@ -97,11 +110,17 @@ object StrokePipeline {
             widths.fill(baseWidth)
             return widths
         }
+        // A crayon is the marker's speed response, pushed. The floor drops and the ceiling rises
+        // so the same gesture produces a wider spread of widths; the shape of the curve is
+        // unchanged, because that shape is what makes the marker feel like a pen at all.
+        val floor = if (brush == BrushType.CRAYON) 0.20f else 0.35f
+        val ceiling = if (brush == BrushType.CRAYON) 2.4f else 1.6f
+        val response = if (brush == BrushType.CRAYON) 1.6f else 0.9f
         for (i in points.indices) {
             val step = if (i == 0) meanStep
             else hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
             val speed = step / meanStep
-            widths[i] = baseWidth * max(0.35f, min(1.6f, 1f / (1f + 0.9f * speed)))
+            widths[i] = baseWidth * max(floor, min(ceiling, 1f / (1f + response * speed)))
         }
         // Normalised so varying the width changes the stroke's character rather than its weight:
         // without this the whole line simply gets thinner, which reads as worse.

@@ -49,6 +49,19 @@ class Drawing {
     fun restoreAll() {
         while (redo()) { /* keep going */ }
     }
+
+    /**
+     * Replace everything with a drawing loaded from disk.
+     *
+     * Undo history goes too, and deliberately: it belonged to the drawing that was open, and
+     * leaving it in place would let somebody undo their way out of the picture they just opened
+     * and into strokes from a different one.
+     */
+    fun load(loaded: List<Stroke>) {
+        strokes.clear()
+        undone.clear()
+        strokes.addAll(loaded)
+    }
 }
 
 /**

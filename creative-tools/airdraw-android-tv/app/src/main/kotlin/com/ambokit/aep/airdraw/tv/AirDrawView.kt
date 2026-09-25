@@ -6,9 +6,12 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Typeface
 import android.graphics.RectF
 import android.view.View
 import com.ambokit.aep.airdraw.AirDrawEngine
+import com.ambokit.aep.airdraw.AirDrawPoint
+import com.ambokit.aep.airdraw.BrushType
 import com.ambokit.aep.airdraw.ToolStrip
 import com.ambokit.aep.core.AepConnectionState
 import kotlin.math.min
@@ -69,12 +72,67 @@ class AirDrawView(
         setLayerType(LAYER_TYPE_HARDWARE, null)
     }
 
-    /** Called each frame: the surface can be resized under us and the viewport must follow. */
+    /**
+     * Called each frame: the surface can be resized under us and the viewport must follow.
+     *
+     * The viewport describes the *drawing area*, not the screen. The toolbar band along the
+     * bottom is not canvas, so document space stops where the band starts - otherwise a stroke
+     * taken to the bottom of the drawing would be stored underneath the tools.
+     */
     fun sizeViewport() {
         if (width <= 0 || height <= 0) return
-        engine.viewport.widthPx = width.toFloat()
-        engine.viewport.heightPx = height.toFloat()
-        engine.viewport.aspect = height.toFloat() / width.toFloat()
+        val sheet = canvasRect(width.toFloat(), height.toFloat())
+        // Document space spans the sheet, not the screen: x 0..1 across the paper and y 0..aspect
+        // down it. Anything else and a stroke taken to the edge of the drawing would be stored
+        // out under the chrome.
+        engine.viewport.widthPx = sheet.width()
+        engine.viewport.heightPx = sheet.height()
+        engine.viewport.aspect = sheet.height() / sheet.width()
+    }
+
+    /**
+     * A pointer position turned into a place on the drawing.
+     *
+     * Pointer space covers the whole screen; document space covers only the sheet. Keeping the
+     * conversion here means the one place that knows where the sheet is is the one that draws it -
+     * the alternative is the activity recomputing the same insets and the two drifting apart.
+     *
+     * @return null when the pointer is not over the paper at all.
+     */
+    fun documentPoint(pointerX: Float, pointerY: Float, timeMs: Long): AirDrawPoint? {
+        if (width <= 0 || height <= 0) return null
+        val sheet = canvasRect(width.toFloat(), height.toFloat())
+        if (sheet.width() <= 0f) return null
+        val screenX = pointerX * width - sheet.left
+        val screenY = pointerY * width - sheet.top
+        // Off the paper is not a place on the drawing. Without this, a pointer up in the header
+        // or down in the toolbar would be stored at a negative or past-the-end coordinate.
+        if (screenX < 0f || screenY < 0f ||
+            screenX > sheet.width() || screenY > sheet.height()) return null
+        return AirDrawPoint(
+            x = engine.viewport.toDocumentX(screenX),
+            y = engine.viewport.toDocumentY(screenY),
+            pressure = 1f,
+            timeMs = timeMs
+        )
+    }
+
+    /**
+     * The screen's shape in pointer units.
+     *
+     * Public because it is the space the *pointer* lives in - the whole screen, toolbar included.
+     * The viewport's aspect describes only the sheet, and mapping the pointer through that one
+     * put its maximum y above where the toolbar begins, so the band was unreachable by
+     * arithmetic: no amount of reaching could produce a y inside it.
+     */
+    val screenAspect: Float
+        get() = if (width > 0) height.toFloat() / width.toFloat() else ToolStrip.DEFAULT_ASPECT
+
+    /** The white sheet: everything above the toolbar, inset a little from the screen edges. */
+    private fun canvasRect(w: Float, h: Float): RectF {
+        val top = h * HEADER_SHARE
+        val bottom = strip.barTop(screenAspect) * w
+        return RectF(w * CANVAS_INSET, top, w - w * CANVAS_INSET, bottom)
     }
 
     fun recycleBitmaps() {
@@ -87,10 +145,25 @@ class AirDrawView(
         val w = width.toFloat()
         val h = height.toFloat()
 
-        // Paper, not a dark UI. The drawing is the interface.
-        canvas.drawColor(PAPER)
+        // Dark chrome around a bright sheet. The drawing is the brightest thing on screen and
+        // everything else recedes, which is the whole reason the chrome is not paper-coloured:
+        // a cream toolbar on cream paper made the tools compete with the picture.
+        canvas.drawColor(CHROME)
 
+        val sheet = canvasRect(w, h)
+        paint.style = Paint.Style.FILL
+        paint.color = PAPER
+        canvas.drawRoundRect(sheet, w * SHEET_RADIUS, w * SHEET_RADIUS, paint)
+
+        // Strokes are clipped to the sheet, so a mark taken past its edge stops at the paper
+        // rather than running out across the chrome.
+        val saved = canvas.save()
+        canvas.clipRect(sheet.left, sheet.top, sheet.right, sheet.bottom)
+        canvas.translate(sheet.left, sheet.top)
         drawStrokes(canvas)
+        canvas.restoreToCount(saved)
+
+        drawHeader(canvas, w, h)
         if (!tracking && engine.drawing.isEmpty) {
             if (streaming) drawWaitingForHands(canvas, w, h) else drawJoinPanel(canvas, w, h)
         }
@@ -100,27 +173,64 @@ class AirDrawView(
     }
 
     /**
-     * The palette, permanently.
+     * The wordmark, so the screen says what it is.
      *
-     * Six percent of the width, and the canvas is the rest. An earlier version hid this behind a
-     * gesture and saved the space; what it cost was a player stuck on a colour they had not
-     * chosen, with the gesture that would have released them not firing. Space is cheaper.
+     * Drawn rather than shipped as an image: one less asset per screen density, and it scales
+     * with the television instead of in steps.
+     */
+    private fun drawHeader(canvas: Canvas, w: Float, h: Float) {
+        val baseline = h * HEADER_SHARE * 0.62f
+        paint.style = Paint.Style.FILL
+        paint.textAlign = Paint.Align.LEFT
+        paint.color = Color.WHITE
+        paint.textSize = h * 0.058f
+        paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+        canvas.drawText("AirDraw", w * CANVAS_INSET, baseline, paint)
+        val markWidth = paint.measureText("AirDraw")
+
+        paint.setTypeface(Typeface.DEFAULT)
+        paint.color = HEADER_MUTED
+        paint.textSize = h * 0.028f
+        canvas.drawText("Move. Draw. Create.", w * CANVAS_INSET + markWidth + w * 0.018f, baseline, paint)
+    }
+
+    /**
+     * The toolbar, permanently, across the bottom.
+     *
+     * An early version hid it behind a gesture and saved the space; what that cost was a player
+     * stuck on a colour they had not chosen, with the gesture that would have released them not
+     * firing. Space is cheaper - that decision is closed.
+     *
+     * A later version put it down the right-hand edge. That worked and read as a wall of twelve
+     * targets, so it is a band now, and the space between the groups does the explaining that a
+     * uniform column could not.
      */
     private fun drawToolStrip(canvas: Canvas, w: Float) {
-        val cells = strip.cells(engine.viewport.aspect)
+        val cells = strip.cells(screenAspect)
         if (cells.isEmpty()) return
 
-        val panel = RectF(
-            cells.first().left * w,
-            cells.first().top * w,
-            cells.first().right * w,
-            cells.last().bottom * w
-        )
-        paint.style = Paint.Style.FILL
-        paint.color = SCRIM
-        canvas.drawRoundRect(panel, panel.width() * 0.3f, panel.width() * 0.3f, paint)
+        for ((index, cell) in cells.withIndex()) {
+            val rect = RectF(cell.left * w, cell.top * w, cell.right * w, cell.bottom * w)
 
-        for (cell in cells) {
+            // Where the remote is. Drawn behind the cell's own mark so it reads as the cell being
+            // lit rather than as a seventh kind of icon.
+            if (index == strip.focusIndex) {
+                paint.style = Paint.Style.FILL
+                paint.color = FOCUS_FILL
+                val pad = rect.height() * 0.06f
+                canvas.drawRoundRect(
+                    RectF(rect.left + pad, rect.top + pad, rect.right - pad, rect.bottom - pad),
+                    rect.height() * 0.3f, rect.height() * 0.3f, paint
+                )
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = rect.height() * 0.05f
+                paint.color = Color.WHITE
+                canvas.drawRoundRect(
+                    RectF(rect.left + pad, rect.top + pad, rect.right - pad, rect.bottom - pad),
+                    rect.height() * 0.3f, rect.height() * 0.3f, paint
+                )
+                paint.style = Paint.Style.FILL
+            }
             val cx = cell.centreX * w
             val cy = cell.centreY * w
             val size = cell.height * w
@@ -129,21 +239,143 @@ class AirDrawView(
                 ToolStrip.Kind.COLOUR -> {
                     paint.style = Paint.Style.FILL
                     paint.color = strip.colours[cell.index]
-                    canvas.drawCircle(cx, cy, size * 0.32f, paint)
-                    if (cell.index == strip.colourIndex) {
+                    canvas.drawCircle(cx, cy, size * 0.24f, paint)
+                    if (!strip.erasing && cell.index == strip.colourIndex) {
                         // A ring, not a tick. At three metres a mark drawn on top of a swatch is
                         // the first thing to disappear.
                         paint.style = Paint.Style.STROKE
-                        paint.strokeWidth = size * 0.07f
+                        paint.strokeWidth = size * 0.05f
                         paint.color = Color.WHITE
-                        canvas.drawCircle(cx, cy, size * 0.42f, paint)
+                        canvas.drawCircle(cx, cy, size * 0.33f, paint)
                         paint.style = Paint.Style.FILL
                     }
                 }
-                ToolStrip.Kind.UNDO -> drawUndoGlyph(canvas, cx, cy, size * 0.3f)
-                ToolStrip.Kind.FLIP -> drawFlipGlyph(canvas, cx, cy, size * 0.28f)
+                ToolStrip.Kind.ERASER -> drawEraserGlyph(canvas, cx, cy, size * 0.19f, strip.erasing)
+                ToolStrip.Kind.SIZE -> {
+                    // The dot is the width it selects, so the control shows what it does.
+                    val dot = size * (0.075f + 0.045f * cell.index)
+                    paint.style = Paint.Style.FILL
+                    paint.color = Color.WHITE
+                    canvas.drawCircle(cx, cy, dot, paint)
+                    if (cell.index == strip.sizeIndex) {
+                        paint.style = Paint.Style.STROKE
+                        paint.strokeWidth = size * 0.045f
+                        paint.color = ACCENT
+                        canvas.drawCircle(cx, cy, dot + size * 0.09f, paint)
+                        paint.style = Paint.Style.FILL
+                    }
+                }
+                ToolStrip.Kind.BRUSH -> drawBrushGlyph(canvas, cx, cy, size * 0.19f, strip.brush)
+                ToolStrip.Kind.UNDO ->
+                    drawActionCell(canvas, rect, "Undo") { x, y, r -> drawUndoGlyph(canvas, x, y, r) }
+                ToolStrip.Kind.CLEAR ->
+                    drawActionCell(canvas, rect, "Clear") { x, y, r -> drawClearGlyph(canvas, x, y, r) }
+                ToolStrip.Kind.SAVE ->
+                    drawActionCell(canvas, rect, "Save", filled = true) { x, y, r -> drawSaveGlyph(canvas, x, y, r) }
             }
         }
+    }
+
+    /**
+     * An action: a rounded button with a glyph and a word.
+     *
+     * Labelled, unlike the pen controls. A colour swatch explains itself and an icon for "clear"
+     * does not - and clearing is the one mistake on this toolbar that costs anything, even with
+     * undo behind it.
+     */
+    private fun drawActionCell(
+        canvas: Canvas,
+        rect: RectF,
+        label: String,
+        filled: Boolean = false,
+        glyph: (Float, Float, Float) -> Unit
+    ) {
+        val radius = rect.height() * 0.30f
+        paint.style = Paint.Style.FILL
+        paint.color = if (filled) ACCENT else PANEL
+        canvas.drawRoundRect(rect, radius, radius, paint)
+
+        val glyphY = rect.centerY()
+        glyph(rect.left + rect.width() * 0.26f, glyphY, rect.height() * 0.14f)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        paint.textAlign = Paint.Align.LEFT
+        paint.textSize = rect.height() * 0.21f
+        canvas.drawText(label, rect.left + rect.width() * 0.46f,
+                        glyphY + paint.textSize * 0.35f, paint)
+    }
+
+    /** The eraser: a block, filled while it is the selected tool. */
+    private fun drawEraserGlyph(canvas: Canvas, cx: Float, cy: Float, radius: Float, selected: Boolean) {
+        if (selected) {
+            paint.style = Paint.Style.FILL
+            paint.color = ACCENT
+            canvas.drawCircle(cx, cy, radius * 1.85f, paint)
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        canvas.drawRoundRect(
+            RectF(cx - radius, cy - radius * 0.72f, cx + radius, cy + radius * 0.72f),
+            radius * 0.3f, radius * 0.3f, paint
+        )
+        paint.color = if (selected) ACCENT else PANEL
+        canvas.drawRect(RectF(cx - radius, cy + radius * 0.12f, cx + radius, cy + radius * 0.72f), paint)
+        paint.color = Color.WHITE
+    }
+
+    /** A stroke that is even, tapered, or ragged - one silhouette per brush. */
+    private fun drawBrushGlyph(canvas: Canvas, cx: Float, cy: Float, radius: Float, brush: BrushType) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = Color.WHITE
+        when (brush) {
+            BrushType.PEN -> {
+                paint.strokeWidth = radius * 0.3f
+                canvas.drawLine(cx - radius, cy + radius * 0.45f, cx + radius, cy - radius * 0.45f, paint)
+            }
+            BrushType.MARKER -> {
+                paint.strokeWidth = radius * 0.6f
+                canvas.drawLine(cx - radius, cy + radius * 0.45f, cx + radius, cy - radius * 0.45f, paint)
+            }
+            BrushType.CRAYON -> {
+                paint.strokeWidth = radius * 0.34f
+                var x = cx - radius
+                var up = true
+                while (x < cx + radius) {
+                    val next = minOf(x + radius * 0.5f, cx + radius)
+                    canvas.drawLine(x, cy + if (up) radius * 0.5f else -radius * 0.2f,
+                                    next, cy + if (up) -radius * 0.2f else radius * 0.5f, paint)
+                    x = next
+                    up = !up
+                }
+            }
+        }
+        paint.style = Paint.Style.FILL
+    }
+
+    /** A bin: clear the drawing. Undo still gets it back, which is why this can exist at all. */
+    private fun drawClearGlyph(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        canvas.drawRoundRect(
+            RectF(cx - radius * 0.75f, cy - radius * 0.55f, cx + radius * 0.75f, cy + radius),
+            radius * 0.22f, radius * 0.22f, paint
+        )
+        canvas.drawRect(RectF(cx - radius, cy - radius * 0.85f, cx + radius, cy - radius * 0.55f), paint)
+    }
+
+    /** An arrow into a tray: keep a copy of this. */
+    private fun drawSaveGlyph(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = radius * 0.28f
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = Color.WHITE
+        canvas.drawLine(cx, cy - radius, cx, cy + radius * 0.25f, paint)
+        canvas.drawLine(cx - radius * 0.55f, cy - radius * 0.25f, cx, cy + radius * 0.25f, paint)
+        canvas.drawLine(cx + radius * 0.55f, cy - radius * 0.25f, cx, cy + radius * 0.25f, paint)
+        canvas.drawLine(cx - radius * 0.8f, cy + radius * 0.85f, cx + radius * 0.8f, cy + radius * 0.85f, paint)
+        paint.style = Paint.Style.FILL
     }
 
     /** An arrow curling back on itself - drawn rather than typed, so no font has to have it. */
@@ -339,7 +571,21 @@ class AirDrawView(
     }
 
     private companion object {
-        const val PAPER = 0xFFF8F4EC.toInt()
+        const val PAPER = 0xFFFFFFFF.toInt()
+
+        /** The chrome around the sheet: dark, so the drawing is the brightest thing on screen. */
+        const val CHROME = 0xFF0B2545.toInt()
+        const val PANEL = 0xFF16325C.toInt()
+        const val ACCENT = 0xFF2E9BF0.toInt()
+        const val HEADER_MUTED = 0xFF9DB0D8.toInt()
+        const val FOCUS_FILL = 0x552E9BF0
+
+        /** How much of the screen's height the wordmark band takes. */
+        const val HEADER_SHARE = 0.11f
+
+        /** The sheet's inset from the screen edges, as a fraction of the width. */
+        const val CANVAS_INSET = 0.022f
+        const val SHEET_RADIUS = 0.016f
         const val INK = 0xFF111827.toInt()
         const val MUTED = 0xFF6B7280.toInt()
         const val SCRIM = 0xE6111827.toInt()

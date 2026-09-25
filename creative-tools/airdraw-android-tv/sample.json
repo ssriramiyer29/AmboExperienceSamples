@@ -1,7 +1,7 @@
 {
   "name": "airdraw-android-tv",
   "renderer": "android-tv",
-  "aepVersion": "0.8.0",
+  "aepVersion": "0.9.0",
   "experienceRules": "core/src/main/kotlin",
   "description": "Draw on the TV with your hand in the air. One hand is the pen; the other opens the tools. The first AEP sample driven by something other than body pose."
 }

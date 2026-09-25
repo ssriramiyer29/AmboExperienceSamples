@@ -10,6 +10,24 @@ package com.ambokit.aep.airdraw
 enum class StrokeSource { AIR, TOUCH }
 
 /**
+ * How a stroke's width responds to how it was drawn.
+ *
+ * Three, not a dozen. Each one has to be distinguishable from the others across a room, and
+ * anything subtler than that is a setting nobody can see the effect of - which on a palette that
+ * costs permanent screen width is worse than not offering it.
+ */
+enum class BrushType {
+    /** Constant width. The one to reach for when the line matters more than the gesture. */
+    PEN,
+
+    /** Width falls off with speed. The original AirDraw stroke, and still the default. */
+    MARKER,
+
+    /** Marker, exaggerated: fast strokes go much thinner, slow ones much fatter. */
+    CRAYON
+}
+
+/**
  * One sample of the drawing instrument, in document space.
  *
  * Document space is 0..1 horizontally and 0..aspect vertically, independent of the TV's
@@ -36,7 +54,22 @@ data class Stroke(
     val argb: Int,
     val baseWidth: Float,
     val source: StrokeSource,
-    val points: List<AirDrawPoint>
+    val points: List<AirDrawPoint>,
+    /**
+     * Defaulted, so every stroke written before brushes existed still means what it meant - both
+     * in the tests above this line and in any drawing already saved to disk.
+     */
+    val brush: BrushType = BrushType.MARKER,
+    /**
+     * Whether this stroke was laid down by the eraser.
+     *
+     * The eraser paints in the paper colour rather than removing anything, so on the canvas this
+     * changes nothing - the mark is an ordinary stroke and undo, zoom and save all treat it as
+     * one. It is recorded because the pixels alone cannot say why they are cream: a later change
+     * to split-on-erase, or a canvas that is not cream, needs to know which marks were meant as
+     * erasures and which were drawn in that colour on purpose.
+     */
+    val erases: Boolean = false
 )
 
 /**

@@ -2,11 +2,12 @@
   "schemaVersion": 1,
   "id": "com.ambokit.aep.airdraw",
   "name": "AirDraw",
-  "description": "Draw on the television with your hand in the air. The first AEP sample driven by something other than body pose.",
+  "description": "Draw on the television with your hands in the air. Hand shapes choose what to do; the body's wrist says where.",
   "renderers": ["android-tv"],
   "requiresCalibration": false,
   "capabilities": {
-    "required": ["camera.hand"]
+    "required": ["camera.hand"],
+    "optional": ["camera.pose"]
   },
-  "aep": { "minimumVersion": "0.8.0" }
+  "aep": { "minimumVersion": "0.9.0" }
 }

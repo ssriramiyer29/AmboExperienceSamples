@@ -103,6 +103,27 @@ class ReachEnvelope(
         minX = 0f; maxX = 0f; minY = 0f; maxY = 0f
     }
 
+    /**
+     * Start from a measured rectangle instead of from the first hand that happens to appear.
+     *
+     * Everything above describes an envelope that learns while somebody draws, and it works - but
+     * it converges *during* the drawing, so the opening strokes of a session are mapped through
+     * whatever it knew at the time. [ReachCalibrator] measures the person before they start, and
+     * this is where that measurement lands.
+     *
+     * Growth still applies afterwards. A seed is a better starting guess, not a final answer: an
+     * arm that turns out to reach further still pulls the edge out, exactly as before.
+     */
+    fun seed(minX: Float, maxX: Float, minY: Float, maxY: Float) {
+        if (!minX.isFinite() || !maxX.isFinite() || !minY.isFinite() || !maxY.isFinite()) return
+        if (maxX <= minX || maxY <= minY) return
+        seen = true
+        this.minX = minX.coerceAtLeast(safeInset)
+        this.maxX = maxX.coerceAtMost(1f - safeInset)
+        this.minY = minY.coerceAtLeast(safeInset)
+        this.maxY = maxY.coerceAtMost(1f - safeInset)
+    }
+
     private fun scale(value: Float, min: Float, max: Float): Float {
         val span = max - min
         if (span <= 1e-4f) return 0.5f
