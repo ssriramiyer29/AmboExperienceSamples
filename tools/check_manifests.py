@@ -428,7 +428,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"{where}: rejected, but not for the stated reason. Expected something "
                 f"containing {fixture['expect']!r}, got: {found}")
 
-    print(f"Schema: {SCHEMA.relative_to(ROOT)}")
+    # relative_to throws when the schema is not under the root, which is the normal case
+    # whenever --root and --schema point into different trees - exactly what the samples
+    # repository passes. A summary line must never be able to fail the run it is summarising.
+    try:
+        schema_label = SCHEMA.relative_to(ROOT)
+    except ValueError:
+        schema_label = SCHEMA
+    print(f"Schema: {schema_label}")
     print(f"Capability catalogue: {len(known)} capabilities vendored")
     print(f"Manifests: {len(real)} real, {len(valid)} valid fixture(s), {len(invalid)} invalid fixture(s)")
     print(f"Declarations cross-checked against source: {agreements}")
