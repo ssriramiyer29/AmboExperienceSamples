@@ -384,14 +384,30 @@ class ZoomGesture(
     /**
      * @return the change to apply since the last one, or null when there is nothing worth applying.
      */
-    fun update(a: HandPointer?, b: HandPointer?, bothPinching: Boolean): Change? {
-        if (a == null || b == null || !bothPinching) {
+    fun update(a: HandPointer?, b: HandPointer?, bothEngaged: Boolean): Change? =
+        update(a?.x, a?.y, b?.x, b?.y, bothEngaged)
+
+    /**
+     * The same gesture, driven by two bare positions.
+     *
+     * Added so pose wrists can drive it. The arithmetic below never wanted a [HandPointer] - it
+     * uses two x/y pairs and nothing else - and requiring one meant a pose-driven zoom would have
+     * had to fabricate pinch strengths and handedness it does not have, or a second copy of this
+     * class would have appeared beside it. Two spellings of one gesture is exactly the divergence
+     * this codebase keeps finding in other people's code.
+     *
+     * @param bothEngaged whether the caller considers the gesture held. It used to be named
+     *   `bothPinching`, from when two pinches were the only way in; under the pose control scheme
+     *   two closed fists are, and the class never cared which.
+     */
+    fun update(ax: Float?, ay: Float?, bx: Float?, by: Float?, bothEngaged: Boolean): Change? {
+        if (ax == null || ay == null || bx == null || by == null || !bothEngaged) {
             end()
             return null
         }
-        val separation = hypot(a.x - b.x, a.y - b.y)
-        val midX = (a.x + b.x) * 0.5f
-        val midY = (a.y + b.y) * 0.5f
+        val separation = hypot(ax - bx, ay - by)
+        val midX = (ax + bx) * 0.5f
+        val midY = (ay + by) * 0.5f
 
         if (!active) {
             active = true
