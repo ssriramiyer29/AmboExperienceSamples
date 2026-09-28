@@ -5,17 +5,25 @@
  * or a frame clock - it takes degrees in and gives a number between -1 and 1 out, and would run
  * unchanged on a television or in Unity.
  *
- * **Which axis, and why it is not simply asserted.** `motion.orientation@1` reports yaw, pitch and
- * roll. Held upright, a phone tilted left and right rotates about the axis running up through the
- * screen, which Android's SensorManager calls roll - so roll is the steering axis, and the default
- * below says so. It has never been checked against the Companion on a real phone, which is why
- * `axis` is a parameter rather than a constant and why the game draws the live numbers on screen.
- * The first session with a phone is what settles it; until then this is arithmetic, not a fact.
+ * **Which axis, measured on a real phone on 2026-09-28: yaw.**
  *
- * The schema's `screenRotationDeg` would say whether the phone is in landscape, which would let
- * this pick the axis by itself. It is not usable: it is the capability catalogue's only numeric
- * enum, and every AEP renderer reads it as a string the wire never carries, so it silently never
- * arrives. See the note in AEP's capability_ir.py.
+ * This file used to default to roll, reasoned like so: a phone held upright and tilted left and
+ * right rotates about the axis running up through the screen, which Android's SensorManager calls
+ * roll. The convention was right and the model of the player was wrong - nobody holds a phone
+ * upright to steer. They hold it flat and turn it like a wheel, and turning a flat phone is
+ * rotation about the vertical axis, which is yaw. Held flat, roll barely changes and is noisy,
+ * which is exactly how it felt: the car pinned to one side and followed only sometimes.
+ *
+ * The lesson is cheap to state and was not cheap to find: the axis was never the uncertain part.
+ * How a person holds the thing was.
+ *
+ * `axis` stays a parameter because a different game may want a different grip - a flight sample
+ * would read pitch - and the sample keeps its live switch so the next device can be checked in
+ * one tilt rather than one rebuild.
+ *
+ * The schema's `screenRotationDeg` would have said whether the phone was in landscape and is
+ * unusable: it is the capability catalogue's only numeric enum, and every AEP renderer reads it
+ * as a string the wire never carries, so it silently never arrives. See AEP's capability_ir.py.
  */
 
 export type SteeringAxis = "roll" | "pitch" | "yaw";
@@ -25,21 +33,55 @@ export interface SteeringConfig {
   readonly axis: SteeringAxis;
   /** How many frames of holding still establish the centre. About half a second at 30Hz. */
   readonly neutralFrames: number;
+  /**
+   * How far the phone may move between two frames and still count as held still, in degrees.
+   *
+   * The screen says "hold the phone still" and this is what makes that true. Without it the
+   * centre was captured from the first frames that arrived, which is precisely when the player is
+   * lowering the phone from scanning a QR code to holding it like a wheel - so the centre was a
+   * point somewhere through that movement, and the car pulled hard to one side from the start.
+   * It looked like the wrong axis, because re-centring was the thing that fixed it.
+   */
+  readonly stillnessDeg: number;
   /** Tilt at which steering is full lock, in degrees from the captured centre. */
   readonly fullLockDeg: number;
   /** Tilt below which the car goes straight. Stops a hand that is merely not perfectly level. */
   readonly deadzoneDeg: number;
   /** 0 = follow instantly, 1 = never move. Takes the jitter off without adding felt lag. */
   readonly smoothing: number;
+  /**
+   * How fast the captured centre follows the phone while the player is going straight, per frame.
+   *
+   * Needed because yaw is the steering axis and `motion.orientation` is requested with
+   * `reference: "game"` - no magnetic north, which the catalogue recommends and which means yaw
+   * is integrated rather than absolute. It drifts. Over a two-minute race a fixed centre slowly
+   * becomes wrong and the car develops a pull the player has to fight.
+   *
+   * Applied at two rates, and the second exists because the first version was a ratchet. It
+   * adapted only inside the deadzone, so the moment drift pushed the offset past three degrees
+   * adaptation stopped and nothing could pull it back. The car developed a permanent lean and the
+   * only cure was a manual re-centre, every time. Reported from play as having to press the axis
+   * key again, which sounded like the axis and was not.
+   *
+   * Inside the deadzone it follows briskly: a player going straight is quietly redefining
+   * straight. Outside it follows about seven times slower, which is negligible across a turn of a
+   * few seconds and still absorbs a minute of drift. No state is unrecoverable.
+   */
+  readonly centreFollow: number;
+  /** The slow rate, used while the player is deliberately turning. See centreFollow. */
+  readonly centreFollowTurning: number;
 }
 
 export function steeringConfig(overrides: Partial<SteeringConfig> = {}): SteeringConfig {
   return {
-    axis: overrides.axis ?? "roll",
+    axis: overrides.axis ?? "yaw",
     neutralFrames: overrides.neutralFrames ?? 15,
+    stillnessDeg: overrides.stillnessDeg ?? 2.0,
     fullLockDeg: overrides.fullLockDeg ?? 35,
     deadzoneDeg: overrides.deadzoneDeg ?? 3,
     smoothing: overrides.smoothing ?? 0.35,
+    centreFollow: overrides.centreFollow ?? 0.004,
+    centreFollowTurning: overrides.centreFollowTurning ?? 0.0006,
   };
 }
 
@@ -53,6 +95,8 @@ export class Steering {
   readonly #config: SteeringConfig;
   #samples: number[] = [];
   #neutralDeg: number | null = null;
+  /** What the centre was when first captured, kept only so drift can be reported. */
+  #capturedDeg: number | null = null;
   #value = 0;
   #rawDeg = 0;
 
@@ -66,6 +110,12 @@ export class Steering {
   get rawDeg(): number { return this.#rawDeg; }
   /** The captured centre, or null while the player is still being asked to hold still. */
   get neutralDeg(): number | null { return this.#neutralDeg; }
+  /** How far the centre has moved since it was captured. Drift, made visible. */
+  get centreDriftDeg(): number {
+    return this.#capturedDeg === null || this.#neutralDeg === null
+      ? 0
+      : shortestAngle(this.#neutralDeg - this.#capturedDeg);
+  }
   get isCentred(): boolean { return this.#neutralDeg !== null; }
   /** How far through capturing the centre, 0..1. */
   get centringProgress(): number {
@@ -79,16 +129,33 @@ export class Steering {
     this.#rawDeg = degrees;
 
     if (this.#neutralDeg === null) {
+      // A frame that moved too far from the last one is not the player holding still; it is the
+      // player still arriving. Start the count again rather than averaging the journey in.
+      const previous = this.#samples[this.#samples.length - 1];
+      if (previous !== undefined
+        && Math.abs(shortestAngle(degrees - previous)) > this.#config.stillnessDeg) {
+        this.#samples = [degrees];
+        return;
+      }
       this.#samples.push(degrees);
       if (this.#samples.length < this.#config.neutralFrames) return;
       // The median, not the mean: one wild sample while the player is picking the phone up
       // would drag a mean off centre and leave the car pulling to one side all game.
       const sorted = [...this.#samples].sort((a, b) => a - b);
       this.#neutralDeg = sorted[Math.floor(sorted.length / 2)] ?? 0;
+      this.#capturedDeg = this.#neutralDeg;
       return;
     }
 
     const offset = shortestAngle(degrees - this.#neutralDeg);
+
+    // Going straight redefines straight briskly; turning redefines it very slowly. Always one or
+    // the other, so there is no state the compensation cannot climb back out of.
+    const follow = Math.abs(offset) <= this.#config.deadzoneDeg
+      ? this.#config.centreFollow
+      : this.#config.centreFollowTurning;
+    this.#neutralDeg = shortestAngle(this.#neutralDeg + offset * follow);
+
     const beyondDeadzone = Math.abs(offset) <= this.#config.deadzoneDeg
       ? 0
       : Math.sign(offset) * (Math.abs(offset) - this.#config.deadzoneDeg);
@@ -101,6 +168,7 @@ export class Steering {
   recentre(): void {
     this.#samples = [];
     this.#neutralDeg = null;
+    this.#capturedDeg = null;
     this.#value = 0;
   }
 }

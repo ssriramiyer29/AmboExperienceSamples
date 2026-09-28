@@ -22,7 +22,7 @@ export interface Obstacle {
 }
 
 export interface RaceSnapshot {
-  readonly phase: "waiting" | "racing" | "crashed";
+  readonly phase: "waiting" | "racing" | "paused" | "crashed";
   /** The car, 0..1 across the road. */
   readonly carX: number;
   /** Metres, for the score. */
@@ -52,6 +52,20 @@ export interface RaceConfig {
   /** Seconds between spawns at the start speed; scales down as the car speeds up. */
   readonly spawnSeconds: number;
   readonly invulnerableMs: number;
+  /**
+   * How close to the verge the car may go, and where obstacles may appear. One number for both,
+   * deliberately.
+   *
+   * They used to differ: the car could reach 0 and 1 while obstacles spawned between 0.12 and
+   * 0.88. The nearest obstacle to a car pinned at the edge was 0.12 away and the hit reach is
+   * 0.115, so both edges were a safe lane you could park in for the whole race. Reported from
+   * play, not from reading the code, which is the only way that kind of gap ever surfaces - the
+   * arithmetic is obvious once you go looking and invisible until someone wins by cheating.
+   *
+   * Sharing the number means an edge is reachable by whatever can hit you there, whatever anyone
+   * later does to the widths.
+   */
+  readonly roadMargin: number;
 }
 
 export function raceConfig(overrides: Partial<RaceConfig> = {}): RaceConfig {
@@ -65,6 +79,7 @@ export function raceConfig(overrides: Partial<RaceConfig> = {}): RaceConfig {
     obstacleHalfWidth: overrides.obstacleHalfWidth ?? 0.06,
     spawnSeconds: overrides.spawnSeconds ?? 1.15,
     invulnerableMs: overrides.invulnerableMs ?? 1200,
+    roadMargin: overrides.roadMargin ?? 0.09,
   };
 }
 
@@ -97,6 +112,13 @@ export class Race {
     this.#config = config;
     this.#random = random;
     this.#lives = config.lives;
+  }
+
+  /** Pause and resume, for the player who has to answer the door mid-race. */
+  togglePause(): boolean {
+    if (this.#phase === "racing") { this.#phase = "paused"; return true; }
+    if (this.#phase === "paused") { this.#phase = "racing"; return true; }
+    return false;
   }
 
   start(): void {
@@ -143,7 +165,9 @@ export class Race {
 
     const speed = this.#speed;
     this.#distance += speed * dt * 100;
-    this.#carX = clamp(this.#carX + clamp(steering, -1, 1) * this.#config.steerRate * dt, 0, 1);
+    const margin = this.#config.roadMargin;
+    this.#carX = clamp(
+      this.#carX + clamp(steering, -1, 1) * this.#config.steerRate * dt, margin, 1 - margin);
 
     // Spawning quickens with speed, so the gaps stay about the same length of road rather than
     // the same length of time - otherwise the game gets easier as it gets faster.
@@ -152,7 +176,8 @@ export class Race {
       this.#sinceSpawn = 0;
       this.#obstacles.push({
         id: this.#nextId++,
-        x: 0.12 + this.#random() * 0.76,
+        // The same span the car can reach, so no edge is safe.
+        x: margin + this.#random() * (1 - margin * 2),
         y: 0,
         kind: this.#random() < 0.25 ? "barrier" : "cone",
       });

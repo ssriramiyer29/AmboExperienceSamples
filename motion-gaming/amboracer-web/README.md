@@ -54,20 +54,65 @@ The build is one self-contained file. Copy `dist/amboracer.js` and the `.amborac
 AEP is bundled in rather than fetched from a CDN. A sample whose behaviour depends on what a CDN
 served that day is not a reference for anything.
 
-## One number on screen is not decoration
+## Controls
 
-The bottom-right corner shows the live tilt angle, the captured centre and the steering value.
-**Which angle steers has never been checked against a real Companion.** Held upright, a phone
-tilted left and right rotates about the axis Android's `SensorManager` calls roll, so roll is what
-`rules/steering.ts` reads — reasoned from a convention, not measured from a device.
+| | |
+|---|---|
+| Tilt the phone | steer |
+| Tap the phone, or space | start, pause, resume, race again |
+| Arrow keys | steer without a phone |
+| `C` | re-centre |
+| `1` `2` `3` | steer on yaw, pitch or roll - a measuring tool, see below |
 
-The schema's `screenRotationDeg` would remove the doubt by saying whether the phone is in
-landscape. It is unusable: it is the capability catalogue's only numeric enum, and every AEP
-renderer reads it as a string the wire never carries, so it silently never arrives.
+The keyboard is not a fallback bolted on. A reference sample that only works when a phone, a
+Gateway and a wifi network all behave is a sample nobody can open, and if the keyboard drives the
+car while the phone does not, the game is fine and the capability is not.
 
-So the first session with a phone is the measurement. Tilt left, and watch whether `roll` moves
-and which way `steer` goes. When that is settled, `steeringConfig({ axis })` records it and the
-diagnostics come off.
+## What a real phone taught this sample
+
+Every one of these came from one evening's play and none of them from reading the code.
+
+**The steering axis is yaw, not roll.** This file used to say roll, reasoned like so: a phone held
+upright and tilted left and right rotates about the axis Android calls roll. The convention was
+right and the model of the player was wrong - nobody holds a phone upright to steer. They hold it
+flat and turn it like a wheel, which is yaw. Held flat, roll barely moves and is noisy, which is
+exactly how it felt. The axis was never the uncertain part; how a person holds the thing was.
+
+**Yaw drifts, so the centre has to follow.** `motion.orientation` is requested with
+`reference: "game"` - no magnetic north, which the catalogue recommends - so yaw is integrated
+rather than absolute. The captured centre follows the phone slowly while the player goes straight,
+and about seven times slower while they hold a turn. The second rate exists because the first
+version adapted only inside the deadzone and was a ratchet: once drift pushed the offset past
+three degrees nothing could pull it back, the car developed a permanent lean, and the only cure
+was re-centring by hand every single time.
+
+**"Hold the phone still" has to mean it.** The centre was captured from the first frames that
+arrived, which is precisely when the player is lowering the phone from scanning a QR code to
+holding it like a wheel. The centre landed somewhere mid-movement. Capture now restarts whenever
+two consecutive frames differ by more than two degrees.
+
+**Neither edge of the road may be safe.** Obstacles spawned across `[0.12, 0.88]`, the car could
+reach `0` and `1`, and the hit reach is `0.115` - so the nearest possible obstacle to a car pinned
+at the edge was two thousandths too far away to ever touch it. Both verges were a lane you could
+park in for the whole race. The car and the obstacles now share one `roadMargin`.
+
+The numbers along the bottom of the screen are what found most of this, and they are still there
+on purpose. They print all three angles rather than only the chosen one, because the reading that
+cannot tell you whether your guess was right is the one you guessed.
+
+## A trap worth knowing about
+
+`libs/*.tgz` are resolved by path, so **npm will not notice a tarball that changed without a
+version bump**. `npm install` says "up to date" and the old code stays in the bundle. That never
+happens across a release, where a new version means a new filename - but it happens constantly
+while the platform and the sample are being changed together. When in doubt:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+```
+
+The Android samples have no equivalent problem because a changed AAR has a changed filename.
 
 ## Layout
 
