@@ -37,7 +37,7 @@ project and carries no `sample.json` now fails rather than being ignored.
 | Field | |
 |---|---|
 | `name` | directory name |
-| `renderer` | `android-tv` or `unity` |
+| `renderer` | `android-tv`, `unity` or `web` |
 | `aepVersion` | which AEP binaries are **vendored in this directory** |
 | `experienceRules` | path to the renderer-free rules, **or `null`** |
 | `description` | one line |
@@ -48,6 +48,41 @@ so on purpose — the alternative is a check that finds nothing to look at and r
 `aepVersion` and `experience.json`'s `aep.minimumVersion` are not the same number and are not
 meant to be. One says which binaries sit in this folder; the other says the oldest release the
 experience would run against at all.
+
+## What each renderer vendors
+
+The promise is the same on all three - a sample builds from published AEP binaries alone, carried
+in the sample and tracked in git - and each ecosystem spells it its own way.
+
+| Renderer | Where | What |
+|---|---|---|
+| `android-tv` | `libs/` | `AEP.Core-<version>.jar`, `AEP.HostSDK-<version>.aar`, `AEP.AndroidTV.Adapter-<version>.aar` |
+| `unity` | `Assets/Plugins/AEP/` | the three DLLs, plus a `VERSION` sidecar because DLL filenames carry no version |
+| `web` | `libs/` | `ambokit-aep-core-<version>.tgz`, `ambokit-aep-host-<version>.tgz`, `ambokit-aep-web-<version>.tgz` |
+
+The web tarballs are what `npm pack` produces for the three packages, attached to the GitHub
+release beside the JARs, AARs and DLLs. A scoped name packs with its scope flattened, so
+`@ambokit/aep-core` at 0.9.0 becomes `ambokit-aep-core-0.9.0.tgz`.
+
+**A web sample must resolve them from `libs/`,** and `check_samples.py` fails it otherwise:
+
+```json
+"dependencies": {
+  "@ambokit/aep-core": "file:libs/ambokit-aep-core-0.9.0.tgz",
+  "@ambokit/aep-host": "file:libs/ambokit-aep-host-0.9.0.tgz",
+  "@ambokit/aep-web":  "file:libs/ambokit-aep-web-0.9.0.tgz"
+}
+```
+
+That check has no Android equivalent because npm has a default nobody chose. `"@ambokit/aep-core":
+"0.9.0"` is valid JSON, installs on a machine that already has the package cached, and resolves
+from the public registry everywhere else - which for a private platform is nowhere at all. The
+sample would work perfectly for whoever wrote it and fail for everyone who cloned it, which is the
+same failure the tracked-binary check exists to prevent, arriving by a different route.
+
+Import by package name, never by path into `libs/`. What a sample is allowed to depend on is the
+published package; where it happens to be resolved from is this repository's business and may
+change.
 
 ## `experience.json`
 

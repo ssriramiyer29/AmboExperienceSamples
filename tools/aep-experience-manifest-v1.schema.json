@@ -27,11 +27,11 @@
       "type": "string"
     },
     "renderers": {
-      "description": "The renderers this experience ships on. A manifest is per experience, not per renderer: the same experience on two renderers is one entry naming both.",
+      "description": "The renderers this experience ships on. A manifest is per experience, not per renderer: the same experience on several renderers is one entry naming them all.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": { "enum": ["android-tv", "unity"] }
+      "items": { "enum": ["android-tv", "unity", "web"] }
     },
     "requiresCalibration": {
       "description": "Whether the player must be calibrated before the experience runs (ADR-0002). Mirrors AepExperienceDefinition.requiresCalibration; defaults to true there and here.",

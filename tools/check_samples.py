@@ -52,6 +52,16 @@ UNITY_PLUGIN_DIR = "Assets/Plugins/AEP"
 RENDERER_IMPORT_KOTLIN = re.compile(r"^\s*import\s+(android|androidx)\.", re.MULTILINE)
 RENDERER_IMPORT_CSHARP = re.compile(r"^\s*using\s+UnityEngine", re.MULTILINE)
 
+# The web's renderer is the DOM, and it is reached by naming a global rather than by importing,
+# so there is no import line to look for. Matched on the names themselves - which is why the
+# source is stripped of comments first: a rule file explaining that it must not touch `document`
+# would otherwise be reported as touching it. That is not hypothetical; it happened twice in one
+# day in the AEP repository, to two checks written by someone who knew about the first.
+RENDERER_USE_TYPESCRIPT = re.compile(
+    r"\b(document|window|requestAnimationFrame|cancelAnimationFrame|HTMLElement"
+    r"|HTMLCanvasElement|CanvasRenderingContext2D|localStorage|navigator)\b")
+COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
 # A sample must not be able to reach AEP source. These are how each renderer would do it.
 GRADLE_SOURCE_DEP = re.compile(r'project\(":aep[-.]')
 
@@ -64,6 +74,16 @@ AEP_PLATFORM_PACKAGES = {
     "com.ambokit.unity-host",
     "com.ambokit.aep.unity-adapter",
     "com.ambokit.aep.binary-builder",
+}
+
+# The web renderer's three published packages, and the tarball npm pack produces for each. A
+# scoped name packs with the scope flattened: @ambokit/aep-core at 0.9.0 becomes
+# ambokit-aep-core-0.9.0.tgz. Listed rather than derived so a rename has to be made here on
+# purpose, the same reason the Unity package ids are listed above.
+WEB_PACKAGES = {
+    "@ambokit/aep-core": "ambokit-aep-core",
+    "@ambokit/aep-host": "ambokit-aep-host",
+    "@ambokit/aep-web": "ambokit-aep-web",
 }
 
 # Working files that must never reach a public reference sample. Not pedantry: these appear
@@ -132,6 +152,66 @@ def check_android(sample: pathlib.Path, name: str, version: str) -> None:
             fail(name, f"{expected.name} is present but untracked - it would not survive a clone")
         else:
             ok(name, expected.name)
+
+
+def check_web(sample: pathlib.Path, name: str, version: str) -> None:
+    """A web sample carries the three AEP packages as tarballs and resolves them from there.
+
+    The same rule as the other two renderers, in npm's idiom: `libs/` holds versioned binaries
+    that are tracked in git, and the build resolves them from that directory rather than from
+    anywhere on a network. `npm pack` produces exactly these filenames, and a GitHub release
+    attaches them beside the JARs, AARs and DLLs.
+
+    The dependency check is the one that matters and has no Android equivalent, because npm has
+    a default nobody chose: a package.json saying `"@ambokit/aep-core": "0.9.0"` resolves from
+    the public registry, which for a private platform means it resolves from nothing at all - and
+    a sample would fail for a stranger while working perfectly on the machine that wrote it. The
+    vendored tarballs are only vendored if something depends on them.
+    """
+    manifest = sample / "package.json"
+    if not manifest.exists():
+        fail(name, "renderer is web but there is no package.json")
+        return
+    try:
+        declared = json.loads(manifest.read_text())
+    except json.JSONDecodeError as problem:
+        fail(name, f"package.json is not valid JSON ({problem})")
+        return
+
+    libs = sample / "libs"
+    if not libs.is_dir():
+        fail(name, "no libs/ directory; a sample must carry its own binaries")
+        return
+
+    dependencies = {**(declared.get("dependencies") or {}),
+                    **(declared.get("devDependencies") or {})}
+
+    for package, stem in WEB_PACKAGES.items():
+        expected = libs / f"{stem}-{version}.tgz"
+        if not expected.exists():
+            # Name the near-misses: a version bump that updated the declaration and forgot the
+            # files is the likely cause, and saying so beats "file not found".
+            siblings = sorted(p.name for p in libs.glob(f"{stem}-*.tgz"))
+            detail = f" (found {', '.join(siblings)})" if siblings else ""
+            fail(name, f"missing {expected.name}{detail}")
+            continue
+        if expected.stat().st_size == 0:
+            fail(name, f"{expected.name} is empty")
+            continue
+        if not is_vendored(expected):
+            fail(name, f"{expected.name} is present but untracked - it would not survive a clone")
+            continue
+
+        pinned = dependencies.get(package)
+        if pinned is None:
+            fail(name, f"{expected.name} is vendored but nothing depends on {package}")
+        elif not pinned.startswith("file:"):
+            fail(name, f"{package} resolves {pinned!r} rather than the vendored tarball; "
+                       f"a public registry cannot serve a private platform")
+        elif pathlib.PurePosixPath(pinned[len("file:"):]).name != expected.name:
+            fail(name, f"{package} resolves {pinned!r}, not {expected.name}")
+        else:
+            ok(name, f"{expected.name}, resolved from libs/")
 
 
 CLEARTEXT_FLAG = re.compile(r'android:usesCleartextTraffic\s*=\s*"true"')
@@ -327,17 +407,31 @@ def check_experience_rules(sample: pathlib.Path, name: str, declared: object) ->
         return
 
     offenders = []
+    scanned = 0
     for path in sorted(rules.rglob("*.kt")):
+        scanned += 1
         if RENDERER_IMPORT_KOTLIN.search(path.read_text()):
             offenders.append(str(path.relative_to(sample)))
     for path in sorted(rules.rglob("*.cs")):
+        scanned += 1
         if RENDERER_IMPORT_CSHARP.search(path.read_text(encoding="utf-8-sig")):
+            offenders.append(str(path.relative_to(sample)))
+    for path in sorted(rules.rglob("*.ts")):
+        scanned += 1
+        if RENDERER_USE_TYPESCRIPT.search(COMMENTS.sub(" ", path.read_text(encoding="utf-8"))):
             offenders.append(str(path.relative_to(sample)))
 
     if offenders:
         fail(name, f"experience rules import a renderer: {', '.join(offenders)}")
+    elif scanned == 0:
+        # A directory this check cannot read is not a directory that passed it. Before the web
+        # renderer existed only .kt and .cs were scanned, so a rules directory in any other
+        # language reported "renderer-independent" having opened nothing - and a skipped check
+        # and a passing check look identical from the outside, which is the reason a project
+        # directory without a sample.json fails rather than being ignored.
+        fail(name, f"experienceRules names {declared}, which holds no source this check can read")
     else:
-        ok(name, "experience rules are renderer-independent")
+        ok(name, f"experience rules are renderer-independent ({scanned} files)")
 
 
 def check_declares_its_experience(sample: pathlib.Path, name: str, declaration: dict) -> None:
@@ -410,6 +504,8 @@ def main() -> int:
             check_no_platform_source(sample, name)
         elif renderer == "unity":
             check_unity(sample, name, version)
+        elif renderer == "web":
+            check_web(sample, name, version)
         else:
             fail(name, f"unknown renderer {renderer!r} - this check has no rules for it")
 

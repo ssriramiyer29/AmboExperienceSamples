@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.ambokit.aep.amboracer",
+  "name": "AmboRacer",
+  "description": "Tilt the phone to steer a car down an endless road. The browser is the screen; the phone is the wheel.",
+  "renderers": ["web"],
+  "requiresCalibration": false,
+  "capabilities": {
+    "required": ["motion.orientation"],
+    "optional": ["input.touch"]
+  },
+  "aep": { "minimumVersion": "0.9.0" }
+}

@@ -1,0 +1,19 @@
+{
+  "//": [
+    "The renderer half of this sample may name the DOM; rules/ may not, and check_samples.py",
+    "enforces that by reading rules/*.ts for DOM globals. The compiler cannot enforce it here",
+    "the way AEP Core's tsconfig does, because one tsconfig covers both halves - so the check is",
+    "the guarantee, and it is negative-tested."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "rules/**/*.ts"]
+}
