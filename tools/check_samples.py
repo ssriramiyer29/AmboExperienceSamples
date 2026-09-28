@@ -66,6 +66,16 @@ AEP_PLATFORM_PACKAGES = {
     "com.ambokit.aep.binary-builder",
 }
 
+# The web renderer's three published packages, and the tarball npm pack produces for each. A
+# scoped name packs with the scope flattened: @ambokit/aep-core at 0.9.0 becomes
+# ambokit-aep-core-0.9.0.tgz. Listed rather than derived so a rename has to be made here on
+# purpose, the same reason the Unity package ids are listed above.
+WEB_PACKAGES = {
+    "@ambokit/aep-core": "ambokit-aep-core",
+    "@ambokit/aep-host": "ambokit-aep-host",
+    "@ambokit/aep-web": "ambokit-aep-web",
+}
+
 # Working files that must never reach a public reference sample. Not pedantry: these appear
 # whenever someone renames or migrates in place, they are invisible in an editor, and a reader
 # cannot tell a stale .pre-canonical.bak from the file that is actually compiled.
@@ -132,6 +142,66 @@ def check_android(sample: pathlib.Path, name: str, version: str) -> None:
             fail(name, f"{expected.name} is present but untracked - it would not survive a clone")
         else:
             ok(name, expected.name)
+
+
+def check_web(sample: pathlib.Path, name: str, version: str) -> None:
+    """A web sample carries the three AEP packages as tarballs and resolves them from there.
+
+    The same rule as the other two renderers, in npm's idiom: `libs/` holds versioned binaries
+    that are tracked in git, and the build resolves them from that directory rather than from
+    anywhere on a network. `npm pack` produces exactly these filenames, and a GitHub release
+    attaches them beside the JARs, AARs and DLLs.
+
+    The dependency check is the one that matters and has no Android equivalent, because npm has
+    a default nobody chose: a package.json saying `"@ambokit/aep-core": "0.9.0"` resolves from
+    the public registry, which for a private platform means it resolves from nothing at all - and
+    a sample would fail for a stranger while working perfectly on the machine that wrote it. The
+    vendored tarballs are only vendored if something depends on them.
+    """
+    manifest = sample / "package.json"
+    if not manifest.exists():
+        fail(name, "renderer is web but there is no package.json")
+        return
+    try:
+        declared = json.loads(manifest.read_text())
+    except json.JSONDecodeError as problem:
+        fail(name, f"package.json is not valid JSON ({problem})")
+        return
+
+    libs = sample / "libs"
+    if not libs.is_dir():
+        fail(name, "no libs/ directory; a sample must carry its own binaries")
+        return
+
+    dependencies = {**(declared.get("dependencies") or {}),
+                    **(declared.get("devDependencies") or {})}
+
+    for package, stem in WEB_PACKAGES.items():
+        expected = libs / f"{stem}-{version}.tgz"
+        if not expected.exists():
+            # Name the near-misses: a version bump that updated the declaration and forgot the
+            # files is the likely cause, and saying so beats "file not found".
+            siblings = sorted(p.name for p in libs.glob(f"{stem}-*.tgz"))
+            detail = f" (found {', '.join(siblings)})" if siblings else ""
+            fail(name, f"missing {expected.name}{detail}")
+            continue
+        if expected.stat().st_size == 0:
+            fail(name, f"{expected.name} is empty")
+            continue
+        if not is_vendored(expected):
+            fail(name, f"{expected.name} is present but untracked - it would not survive a clone")
+            continue
+
+        pinned = dependencies.get(package)
+        if pinned is None:
+            fail(name, f"{expected.name} is vendored but nothing depends on {package}")
+        elif not pinned.startswith("file:"):
+            fail(name, f"{package} resolves {pinned!r} rather than the vendored tarball; "
+                       f"a public registry cannot serve a private platform")
+        elif pathlib.PurePosixPath(pinned[len("file:"):]).name != expected.name:
+            fail(name, f"{package} resolves {pinned!r}, not {expected.name}")
+        else:
+            ok(name, f"{expected.name}, resolved from libs/")
 
 
 CLEARTEXT_FLAG = re.compile(r'android:usesCleartextTraffic\s*=\s*"true"')
@@ -410,6 +480,8 @@ def main() -> int:
             check_no_platform_source(sample, name)
         elif renderer == "unity":
             check_unity(sample, name, version)
+        elif renderer == "web":
+            check_web(sample, name, version)
         else:
             fail(name, f"unknown renderer {renderer!r} - this check has no rules for it")
 
