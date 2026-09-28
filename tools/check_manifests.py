@@ -268,9 +268,21 @@ def check_code_agrees(manifest: dict, manifest_path: pathlib.Path, problems: lis
     The point of a manifest is that something outside the app can trust it. A manifest that
     disagrees with the code is worse than no manifest, because it is believed.
     """
+    # .ts joins .kt and .cs for the web renderer. The declaration regex needed no change: a
+    # TypeScript experience constructs AepExperienceDefinition with an object literal, and the
+    # first string in it is still the id with the capability ids after it.
     sources = [p for p in manifest_path.parent.rglob("*")
-               if p.suffix in (".kt", ".cs") and "AepExperienceDefinition" in p.read_text(errors="ignore")]
+               if p.suffix in (".kt", ".cs", ".ts")
+               and "AepExperienceDefinition" in p.read_text(errors="ignore")]
     if not sources:
+        # Said out loud rather than returning quietly. A manifest with no code beside it is not a
+        # manifest that agreed with its code - it is one nothing compared, and the point of a
+        # manifest is that something outside the app can trust it. rockdodge-unity is in exactly
+        # this position today: its C# does not construct the definition where this can see it, so
+        # its manifest has always been believed rather than checked.
+        print(f"note  {manifest_path.relative_to(ROOT)}: no source beside this manifest "
+              f"constructs AepExperienceDefinition, so nothing verified that the code asks for "
+              f"what it declares")
         return 0
 
     where = manifest_path.relative_to(ROOT)

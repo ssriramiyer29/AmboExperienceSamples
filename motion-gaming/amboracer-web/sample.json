@@ -1,0 +1,7 @@
+{
+  "name": "amboracer-web",
+  "renderer": "web",
+  "aepVersion": "0.9.0",
+  "experienceRules": "rules",
+  "description": "Steer with a phone, race in a browser. The web renderer's reference sample: motion.orientation for steering, input.touch to start."
+}

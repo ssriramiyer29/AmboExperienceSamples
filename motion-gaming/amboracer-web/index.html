@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AmboRacer</title>
+<style>
+  :root { color-scheme: dark; --ink:#e8f4ff; --dim:#8fb0c4; --accent:#3ad6a4; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #071522; color: var(--ink); font: 16px/1.5 system-ui, -apple-system, sans-serif;
+    display: grid; place-items: center; padding: 16px;
+  }
+  /* The whole sample is one element, so a site can embed it by dropping this block in. */
+  .amboracer { position: relative; width: min(960px, 100%); aspect-ratio: 4 / 3; max-height: calc(100vh - 32px);
+    border-radius: 18px; overflow: hidden; background: #0b1d2e; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+  canvas { display: block; width: 100%; height: 100%; }
+  .panel { position: absolute; inset: 0; display: grid; place-content: center; gap: 14px;
+    justify-items: center; text-align: center; background: rgba(7,21,34,.93); padding: 24px; }
+  .panel h1 { margin: 0; font-size: clamp(1.4rem, 4vw, 2.1rem); }
+  .panel p { margin: 0; color: var(--dim); max-width: 42ch; }
+  #qr { width: min(220px, 45vw); aspect-ratio: 1; border-radius: 12px; background: #fff; object-fit: contain; }
+  #joinUrl { font: 12px/1.4 ui-monospace, monospace; color: var(--dim); overflow-wrap: anywhere; max-width: 40ch; }
+  #hud { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between;
+    padding: 12px 16px; font-weight: 700; text-shadow: 0 2px 6px #000; pointer-events: none; }
+  #message { position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%);
+    background: rgba(7,21,34,.9); padding: 14px 22px; border-radius: 14px; font-weight: 700; text-align: center; }
+  #centring { position: absolute; left: 50%; bottom: 14%; transform: translateX(-50%);
+    width: min(320px, 70%); text-align: center; background: rgba(7,21,34,.9); padding: 14px; border-radius: 14px; }
+  .bar { height: 8px; border-radius: 99px; background: rgba(255,255,255,.18); margin-top: 10px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
+  /* The instrument. Removed when the steering axis has been measured against a real Companion. */
+  #diagnostics { position: absolute; right: 10px; bottom: 8px; font: 11px ui-monospace, monospace;
+    color: var(--accent); opacity: .7; pointer-events: none; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <!-- data-ambo-gateway overrides where the Gateway is; the default is this page's own origin. -->
+  <div class="amboracer" data-ambo-gateway="">
+    <canvas id="stage"></canvas>
+
+    <div id="hud" hidden><span id="lives">♥♥♥</span><span id="distance">0 m</span></div>
+
+    <div id="centring" hidden>
+      Hold the phone still, level, the way you would hold a wheel.
+      <div class="bar"><i id="centringBar"></i></div>
+    </div>
+
+    <div id="message" hidden></div>
+    <div id="diagnostics"></div>
+
+    <div class="panel" id="join">
+      <h1>AmboRacer</h1>
+      <p>Your phone is the steering wheel. Scan with the AmboKit Companion, then tilt to steer.</p>
+      <img id="qr" alt="Scan to join this race">
+      <p id="joinState">Waiting for a phone…</p>
+      <p id="joinUrl"></p>
+    </div>
+  </div>
+  <script type="module" src="./dist/amboracer.js"></script>
+</body>
+</html>

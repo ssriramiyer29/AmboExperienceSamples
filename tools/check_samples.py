@@ -52,6 +52,16 @@ UNITY_PLUGIN_DIR = "Assets/Plugins/AEP"
 RENDERER_IMPORT_KOTLIN = re.compile(r"^\s*import\s+(android|androidx)\.", re.MULTILINE)
 RENDERER_IMPORT_CSHARP = re.compile(r"^\s*using\s+UnityEngine", re.MULTILINE)
 
+# The web's renderer is the DOM, and it is reached by naming a global rather than by importing,
+# so there is no import line to look for. Matched on the names themselves - which is why the
+# source is stripped of comments first: a rule file explaining that it must not touch `document`
+# would otherwise be reported as touching it. That is not hypothetical; it happened twice in one
+# day in the AEP repository, to two checks written by someone who knew about the first.
+RENDERER_USE_TYPESCRIPT = re.compile(
+    r"\b(document|window|requestAnimationFrame|cancelAnimationFrame|HTMLElement"
+    r"|HTMLCanvasElement|CanvasRenderingContext2D|localStorage|navigator)\b")
+COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
 # A sample must not be able to reach AEP source. These are how each renderer would do it.
 GRADLE_SOURCE_DEP = re.compile(r'project\(":aep[-.]')
 
@@ -397,17 +407,31 @@ def check_experience_rules(sample: pathlib.Path, name: str, declared: object) ->
         return
 
     offenders = []
+    scanned = 0
     for path in sorted(rules.rglob("*.kt")):
+        scanned += 1
         if RENDERER_IMPORT_KOTLIN.search(path.read_text()):
             offenders.append(str(path.relative_to(sample)))
     for path in sorted(rules.rglob("*.cs")):
+        scanned += 1
         if RENDERER_IMPORT_CSHARP.search(path.read_text(encoding="utf-8-sig")):
+            offenders.append(str(path.relative_to(sample)))
+    for path in sorted(rules.rglob("*.ts")):
+        scanned += 1
+        if RENDERER_USE_TYPESCRIPT.search(COMMENTS.sub(" ", path.read_text(encoding="utf-8"))):
             offenders.append(str(path.relative_to(sample)))
 
     if offenders:
         fail(name, f"experience rules import a renderer: {', '.join(offenders)}")
+    elif scanned == 0:
+        # A directory this check cannot read is not a directory that passed it. Before the web
+        # renderer existed only .kt and .cs were scanned, so a rules directory in any other
+        # language reported "renderer-independent" having opened nothing - and a skipped check
+        # and a passing check look identical from the outside, which is the reason a project
+        # directory without a sample.json fails rather than being ignored.
+        fail(name, f"experienceRules names {declared}, which holds no source this check can read")
     else:
-        ok(name, "experience rules are renderer-independent")
+        ok(name, f"experience rules are renderer-independent ({scanned} files)")
 
 
 def check_declares_its_experience(sample: pathlib.Path, name: str, declaration: dict) -> None:
