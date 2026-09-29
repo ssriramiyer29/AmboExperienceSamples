@@ -1,6 +1,6 @@
 import {
-  Aep, AepExperienceDefinition, AepConnectionState, AepOrientationFrame, AepTouch,
-  AepTouchGesture, type AepCapabilityEvent, type AepSession,
+  Aep, AepExperienceDefinition, AepConnectionState, AepOrientationFrame, AepStreamState,
+  AepTouch, AepTouchGesture, type AepCapabilityEvent, type AepSession,
 } from "@ambokit/aep-core";
 import { AmboKitWebHost, AepPayloadJson } from "@ambokit/aep-host";
 import { WebExperienceHost } from "@ambokit/aep-web";
@@ -87,6 +87,21 @@ function useAxis(next: SteeringAxis): void {
 }
 let steeringGranted = false;
 let lastPhase: string = "";
+/**
+ * The phase message and the phone alert share one element, and the alert wins.
+ *
+ * Two strings rather than one because the frame loop rewrites the phase message on every phase
+ * change, and "Tap the phone to start" overwriting "the phone is gone" is precisely how this
+ * sample would go back to saying nothing is wrong.
+ *
+ * Declared here with the rest of the session's state rather than beside the function that paints
+ * them: the subscriptions below are written earlier in the file, and a `let` still in its
+ * temporal dead zone would throw from inside an event handler. That is how the first run of this
+ * sample against a real phone died - everything worked, then a handler touched something that
+ * was not there yet.
+ */
+let alertText = "";
+let phaseText = "";
 // Counted and shown, so "nothing is happening" can be told apart from "something is happening
 // and I am reading it wrong" without opening a console.
 let orientationFrames = 0;
@@ -121,13 +136,71 @@ session.connectionChanged.subscribe((state) => {
       : state === AepConnectionState.RECONNECTING ? "Phone dropped - reconnecting…"
         : state === AepConnectionState.REJOIN_REQUIRED ? "Scan again to rejoin."
           : "Waiting for a phone…";
+
+  // ...and again somewhere it can be seen. #joinState lives inside the join panel, which is
+  // hidden from the moment a phone pairs, so the one place this sample reported a dropped phone
+  // was invisible in exactly the case it was written for.
+  if (state === AepConnectionState.RECONNECTING) phoneGone("Phone dropped - reconnecting…");
+  else if (state === AepConnectionState.REJOIN_REQUIRED) phoneGone("Scan the code again to rejoin.");
+  else if (state === AepConnectionState.CONNECTED) phoneBack();
 });
 
-session.player.connected.subscribe(() => { ui.join.hidden = true; });
+session.player.connected.subscribe(() => { ui.join.hidden = true; phoneBack(); });
 session.player.disconnected.subscribe(() => {
   ui.join.hidden = false;
-  steering.recentre();
+  phoneGone("Phone left. Press space to carry on with the keyboard.");
 });
+
+/**
+ * The phone stopped sending, whatever the link says.
+ *
+ * This is the signal that survives a Gateway which never told us, and it is the reason the
+ * sample watches frames at all rather than trusting the transport. A peer-left is an edge: the
+ * Gateway publishes it once, over Redis pub/sub, which keeps nothing. If this host happens to be
+ * between sockets when it fires - which is what happens when the serverless Gateway's 300s
+ * function limit ends the host's own socket a moment before the phone gives up - there is no
+ * subscriber and the message is gone. The host reconnects to a session whose phone has left and
+ * is told nothing, for as long as the page stays open. An absence cannot be lost that way,
+ * because nobody has to deliver it; AEP is already counting.
+ *
+ * Nothing is configured here on purpose: motion.orientation is continuous, so AEP watches it by
+ * default at two seconds - four times the longest interruption ever recorded on a healthy
+ * stream. input.touch is episodic and exempt, which is right: a player who is not tapping is not
+ * a fault.
+ */
+session.streamChanged.subscribe((change) => {
+  if (change.capability !== "motion.orientation") return;
+  if (change.state === AepStreamState.STALE) {
+    phoneGone(`No tilt for ${(change.silentForMs / 1000).toFixed(1)}s.`
+      + " Press space to carry on with the keyboard.");
+  } else {
+    phoneBack();
+  }
+});
+
+/**
+ * One place that says the phone is not steering any more, and stops the car.
+ *
+ * Stopping it is not decoration. Steering holds its last reading and isCentred stays true after
+ * the phone goes, so without this the car keeps turning on a frozen tilt, into a wall nobody is
+ * driving at, while the screen says nothing. recentre() drops that reading, which both hands the
+ * car back to the keyboard and forces a returning phone to be re-centred - correct after any gap,
+ * because a phone that has been away has been put down, pocketed or carried.
+ *
+ * Idempotent: three independent sources raise this and they routinely raise it together.
+ */
+function phoneGone(message: string): void {
+  if (race.snapshot.phase === "racing") race.togglePause();
+  steering.recentre();
+  alertText = message;
+  paint();
+}
+
+function phoneBack(): void {
+  if (alertText.length === 0) return;
+  alertText = "";
+  paint();
+}
 
 session.capabilities.changed.subscribe(() => {
   // Whether AEP has a typed model is decided by the registry, not by the participant. A
@@ -235,8 +308,14 @@ function pad(degrees: number): string {
 }
 
 function say(message: string): void {
-  ui.message.textContent = message;
-  ui.message.hidden = message.length === 0;
+  phaseText = message;
+  paint();
+}
+
+function paint(): void {
+  const shown = alertText.length > 0 ? alertText : phaseText;
+  ui.message.textContent = shown;
+  ui.message.hidden = shown.length === 0;
 }
 
 function fitCanvas(): void {
