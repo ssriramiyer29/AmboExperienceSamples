@@ -148,7 +148,7 @@ session.connectionChanged.subscribe((state) => {
 session.player.connected.subscribe(() => { ui.join.hidden = true; phoneBack(); });
 session.player.disconnected.subscribe(() => {
   ui.join.hidden = false;
-  phoneGone("Phone left. Press space to carry on with the keyboard.");
+  phoneGone("Phone left. Press space to keep racing on the keyboard.");
 });
 
 /**
@@ -164,15 +164,28 @@ session.player.disconnected.subscribe(() => {
  * because nobody has to deliver it; AEP is already counting.
  *
  * Nothing is configured here on purpose: motion.orientation is continuous, so AEP watches it by
- * default at two seconds - four times the longest interruption ever recorded on a healthy
- * stream. input.touch is episodic and exempt, which is right: a player who is not tapping is not
- * a fault.
+ * default at two seconds. input.touch is episodic and exempt, which is right: a player who is not
+ * tapping is not a fault.
+ *
+ * What this measures is frame ARRIVAL, never a change in value, and the difference is the whole
+ * reason the signal is usable. OrientationProvider registers TYPE_GAME_ROTATION_VECTOR at 30 Hz
+ * and emits on every sensor callback with no deadband - a continuous Android sensor reports at
+ * its requested rate whether or not the device moves. A phone lying still on a table still sends
+ * thirty frames a second, so two seconds of silence is sixty consecutive missing frames and
+ * cannot be produced by a player choosing not to tilt. The message says "no data from the phone"
+ * rather than "no tilt" for that reason: the first is what was measured, the second is a guess
+ * about the player that would be wrong during ordinary play.
+ *
+ * The threshold is inherited and has not been measured HERE. AEP's two seconds is justified
+ * against pose over loopback on a television, which is not orientation over a mobile network. The
+ * on-screen frame counter is what settles it: a pause during ordinary play with the counter still
+ * climbing would mean the threshold is too tight for cellular, not that the phone left.
  */
 session.streamChanged.subscribe((change) => {
   if (change.capability !== "motion.orientation") return;
   if (change.state === AepStreamState.STALE) {
-    phoneGone(`No tilt for ${(change.silentForMs / 1000).toFixed(1)}s.`
-      + " Press space to carry on with the keyboard.");
+    phoneGone(`No data from the phone for ${(change.silentForMs / 1000).toFixed(1)}s.`
+      + " Press space to keep racing on the keyboard.");
   } else {
     phoneBack();
   }
