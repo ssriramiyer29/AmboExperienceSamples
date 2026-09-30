@@ -7,7 +7,7 @@
   "requiresCalibration": false,
   "capabilities": {
     "required": ["motion.orientation"],
-    "optional": ["input.touch"]
+    "optional": ["input.touch", "input.controller"]
   },
   "aep": { "minimumVersion": "0.9.0" }
 }
