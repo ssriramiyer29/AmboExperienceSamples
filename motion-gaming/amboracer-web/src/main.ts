@@ -1,6 +1,6 @@
 import {
-  Aep, AepExperienceDefinition, AepConnectionState, AepOrientationFrame, AepTouch,
-  AepTouchGesture, type AepCapabilityEvent, type AepSession,
+  Aep, AepExperienceDefinition, AepConnectionState, AepOrientationFrame, AepStreamState,
+  AepTouch, AepTouchGesture, type AepCapabilityEvent, type AepSession,
 } from "@ambokit/aep-core";
 import { AmboKitWebHost, AepPayloadJson } from "@ambokit/aep-host";
 import { WebExperienceHost } from "@ambokit/aep-web";
@@ -87,6 +87,35 @@ function useAxis(next: SteeringAxis): void {
 }
 let steeringGranted = false;
 let lastPhase: string = "";
+/**
+ * The phase message and the phone alert share one element, and the alert wins.
+ *
+ * Two strings rather than one because the frame loop rewrites the phase message on every phase
+ * change, and "Tap the phone to start" overwriting "the phone is gone" is precisely how this
+ * sample would go back to saying nothing is wrong.
+ *
+ * Declared here with the rest of the session's state rather than beside the function that paints
+ * them: the subscriptions below are written earlier in the file, and a `let` still in its
+ * temporal dead zone would throw from inside an event handler. That is how the first run of this
+ * sample against a real phone died - everything worked, then a handler touched something that
+ * was not there yet.
+ */
+let alertText = "";
+let alertRank = 0;
+let phaseText = "";
+let connectionText = "Waiting for a phone…";
+
+/**
+ * Which alert outranks which, because two of them fire together and the vaguer one arrives last.
+ *
+ * On a peer-left the host raises ParticipantLeft and THEN SessionChanged(RECONNECTING), so
+ * last-writer-wins shows "reconnecting" about a phone that has gone. Worse, the host never
+ * escalates that to REJOIN_REQUIRED on a peer-left: reconnect attempts are driven by its OWN
+ * socket closing, and its socket is fine. The screen would promise a reconnection forever, for a
+ * phone that is not coming back.
+ */
+const ALERT_TRANSPORT = 1;    // the link is unhappy, and may well recover by itself
+const ALERT_PARTICIPANT = 2;  // the phone itself is gone; only a person can fix that
 // Counted and shown, so "nothing is happening" can be told apart from "something is happening
 // and I am reading it wrong" without opening a console.
 let orientationFrames = 0;
@@ -116,18 +145,96 @@ session.joinChanged.subscribe((join) => {
 });
 
 session.connectionChanged.subscribe((state) => {
-  ui.joinState.textContent =
+  connectionText =
     state === AepConnectionState.CONNECTED ? "Phone connected."
       : state === AepConnectionState.RECONNECTING ? "Phone dropped - reconnecting…"
         : state === AepConnectionState.REJOIN_REQUIRED ? "Scan again to rejoin."
           : "Waiting for a phone…";
+
+  if (state === AepConnectionState.RECONNECTING) {
+    phoneGone("Phone dropped - reconnecting…", ALERT_TRANSPORT);
+  } else if (state === AepConnectionState.REJOIN_REQUIRED) {
+    phoneGone("Scan the code again to rejoin.", ALERT_PARTICIPANT);
+  } else if (state === AepConnectionState.CONNECTED) {
+    phoneBack();
+  }
+  paint();
 });
 
-session.player.connected.subscribe(() => { ui.join.hidden = true; });
+session.player.connected.subscribe(() => { ui.join.hidden = true; phoneBack(); });
 session.player.disconnected.subscribe(() => {
   ui.join.hidden = false;
-  steering.recentre();
+  // Not "reconnecting": the phone has left and the host will never say so itself. See ALERT_*.
+  phoneGone("Phone left. Scan the code again to rejoin, or press space for the keyboard.",
+    ALERT_PARTICIPANT);
 });
+
+/**
+ * The phone stopped sending, whatever the link says.
+ *
+ * This is the signal that survives a Gateway which never told us, and it is the reason the
+ * sample watches frames at all rather than trusting the transport. A peer-left is an edge: the
+ * Gateway publishes it once, over Redis pub/sub, which keeps nothing. If this host happens to be
+ * between sockets when it fires - which is what happens when the serverless Gateway's 300s
+ * function limit ends the host's own socket a moment before the phone gives up - there is no
+ * subscriber and the message is gone. The host reconnects to a session whose phone has left and
+ * is told nothing, for as long as the page stays open. An absence cannot be lost that way,
+ * because nobody has to deliver it; AEP is already counting.
+ *
+ * Nothing is configured here on purpose: motion.orientation is continuous, so AEP watches it by
+ * default at two seconds. input.touch is episodic and exempt, which is right: a player who is not
+ * tapping is not a fault.
+ *
+ * What this measures is frame ARRIVAL, never a change in value, and the difference is the whole
+ * reason the signal is usable. OrientationProvider registers TYPE_GAME_ROTATION_VECTOR at 30 Hz
+ * and emits on every sensor callback with no deadband - a continuous Android sensor reports at
+ * its requested rate whether or not the device moves. A phone lying still on a table still sends
+ * thirty frames a second, so two seconds of silence is sixty consecutive missing frames and
+ * cannot be produced by a player choosing not to tilt. The message says "no data from the phone"
+ * rather than "no tilt" for that reason: the first is what was measured, the second is a guess
+ * about the player that would be wrong during ordinary play.
+ *
+ * The threshold is inherited and has not been measured HERE. AEP's two seconds is justified
+ * against pose over loopback on a television, which is not orientation over a mobile network. The
+ * on-screen frame counter is what settles it: a pause during ordinary play with the counter still
+ * climbing would mean the threshold is too tight for cellular, not that the phone left.
+ */
+session.streamChanged.subscribe((change) => {
+  if (change.capability !== "motion.orientation") return;
+  if (change.state === AepStreamState.STALE) {
+    phoneGone(`No data from the phone for ${(change.silentForMs / 1000).toFixed(1)}s.`
+      + " Press space to keep racing on the keyboard.", ALERT_TRANSPORT);
+  } else {
+    phoneBack();
+  }
+});
+
+/**
+ * One place that says the phone is not steering any more, and stops the car.
+ *
+ * Stopping it is not decoration. Steering holds its last reading and isCentred stays true after
+ * the phone goes, so without this the car keeps turning on a frozen tilt, into a wall nobody is
+ * driving at, while the screen says nothing. recentre() drops that reading, which both hands the
+ * car back to the keyboard and forces a returning phone to be re-centred - correct after any gap,
+ * because a phone that has been away has been put down, pocketed or carried.
+ *
+ * Idempotent: three independent sources raise this and they routinely raise it together.
+ */
+function phoneGone(message: string, rank: number = ALERT_TRANSPORT): void {
+  if (rank < alertRank) return;
+  if (race.snapshot.phase === "racing") race.togglePause();
+  steering.recentre();
+  alertText = message;
+  alertRank = rank;
+  paint();
+}
+
+function phoneBack(): void {
+  if (alertText.length === 0) return;
+  alertText = "";
+  alertRank = 0;
+  paint();
+}
 
 session.capabilities.changed.subscribe(() => {
   // Whether AEP has a typed model is decided by the registry, not by the participant. A
@@ -221,8 +328,8 @@ addEventListener("keydown", (event) => {
   if (event.key === "ArrowRight") { event.preventDefault(); keyboardSteer = 1; }
   if (event.key.toLowerCase() === "c") steering.recentre();
   if (event.key === "1") useAxis("yaw");
-  if (event.key === "2") useAxis("pitch");
-  if (event.key === "3") useAxis("roll");
+  if (event.key === "2") useAxis("roll");
+  if (event.key === "3") useAxis("pitch");
 });
 addEventListener("keyup", (event) => {
   if (event.key === "ArrowLeft" && keyboardSteer < 0) keyboardSteer = 0;
@@ -235,8 +342,18 @@ function pad(degrees: number): string {
 }
 
 function say(message: string): void {
-  ui.message.textContent = message;
-  ui.message.hidden = message.length === 0;
+  phaseText = message;
+  paint();
+}
+
+function paint(): void {
+  const shown = alertText.length > 0 ? alertText : phaseText;
+  ui.message.textContent = shown;
+  ui.message.hidden = shown.length === 0;
+  // And into the panel too, because the panel wins: `.panel` is later in the DOM with inset: 0,
+  // so whenever the join screen is up it paints straight over #message - which is exactly when a
+  // phone has gone, the one moment the alert has to be readable.
+  ui.joinState.textContent = alertText.length > 0 ? alertText : connectionText;
 }
 
 function fitCanvas(): void {
@@ -291,7 +408,7 @@ const experience = new WebExperienceHost(session, (deltaMs) => {
   const centre = steering.neutralDeg;
   ui.diagnostics.textContent = steeringGranted
     ? `y ${pad(latest.yawDeg)} p ${pad(latest.pitchDeg)} r ${pad(latest.rollDeg)}`
-      + ` │ ${axis}[${axis === "yaw" ? 1 : axis === "pitch" ? 2 : 3}] centre ${centre === null ? "—" : pad(centre)}`
+      + ` │ ${axis}[${axis === "yaw" ? 1 : axis === "roll" ? 2 : 3}] centre ${centre === null ? "—" : pad(centre)}`
       + ` off ${pad(steering.rawDeg - (centre ?? steering.rawDeg))} drift ${pad(steering.centreDriftDeg)}`
       + ` steer ${steering.value.toFixed(2)}`
       + ` │ ${orientationFrames}f ${touchEvents}t`
@@ -299,4 +416,33 @@ const experience = new WebExperienceHost(session, (deltaMs) => {
 });
 
 experience.start();
+
+/**
+ * Stop cleanly when the page goes away, and when whoever embedded it says to.
+ *
+ * Without this a page that is closed or navigated away from leaves the session running: the
+ * socket stays up until the Gateway times it out, the phone goes on sending, and the next visit
+ * finds the role already taken. `pagehide` rather than `unload` because a browser restoring from
+ * the back-forward cache never fires `unload`, and Safari treats a page with an `unload` handler
+ * as ineligible for that cache at all.
+ *
+ * Both events, because neither is reliable alone across browsers, and `hasStopped` because
+ * firing both is the normal case rather than the exception.
+ *
+ * The message listener is for embedding: a host page that swaps this demo out of view can stop
+ * it without reloading. Origin-checked, so another window cannot end someone's session.
+ */
+let hasStopped = false;
+function stopExperience(): void {
+  if (hasStopped) return;
+  hasStopped = true;
+  experience.stop();
+}
+addEventListener("pagehide", stopExperience, { once: true });
+addEventListener("beforeunload", stopExperience, { once: true });
+addEventListener("message", (event: MessageEvent) => {
+  if (event.origin !== location.origin) return;
+  if ((event.data as { type?: string } | null)?.type === "amboracer:stop") stopExperience();
+});
+
 say("Scan the code with the AmboKit Companion.");

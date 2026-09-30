@@ -28,9 +28,32 @@
 
 export type SteeringAxis = "roll" | "pitch" | "yaw";
 
+/**
+ * Which way a positive offset steers, per axis. Measured on a real phone on 2026-09-30.
+ *
+ * Not a detail that could be reasoned out. Android's euler angles do not all increase in the same
+ * rotational sense - turning a flat phone anticlockwise raises yaw, while the equivalent movement
+ * about the other two axes lowers theirs - so a single `Math.sign(offset)` steers correctly on one
+ * axis and backwards on the others. Yaw was measured on 2026-09-28 and is the default; roll and
+ * pitch were measured on 2026-09-30 by switching to them mid-race and watching the car mirror the
+ * tilt.
+ *
+ * Kept as a table rather than folded into `observe`, because each entry is an observation about a
+ * device convention and the next person should be able to see which ones were checked.
+ */
+const AXIS_DIRECTION: Record<SteeringAxis, 1 | -1> = { yaw: 1, roll: -1, pitch: -1 };
+
 export interface SteeringConfig {
-  /** Which reported angle steers. See the note above: roll is the default, not a measured fact. */
+  /** Which reported angle steers. See the note above: yaw, measured rather than reasoned. */
   readonly axis: SteeringAxis;
+  /**
+   * Which way a positive offset turns the car, +1 or -1.
+   *
+   * Defaults per axis from AXIS_DIRECTION. A game whose controller is held differently - upside
+   * down in a cradle, say - flips this rather than editing the table, which records what the
+   * device reports and not how anyone is holding it.
+   */
+  readonly direction: 1 | -1;
   /** How many frames of holding still establish the centre. About half a second at 30Hz. */
   readonly neutralFrames: number;
   /**
@@ -73,8 +96,10 @@ export interface SteeringConfig {
 }
 
 export function steeringConfig(overrides: Partial<SteeringConfig> = {}): SteeringConfig {
+  const axis = overrides.axis ?? "yaw";
   return {
-    axis: overrides.axis ?? "yaw",
+    axis,
+    direction: overrides.direction ?? AXIS_DIRECTION[axis],
     neutralFrames: overrides.neutralFrames ?? 15,
     stillnessDeg: overrides.stillnessDeg ?? 2.0,
     fullLockDeg: overrides.fullLockDeg ?? 35,
@@ -160,7 +185,9 @@ export class Steering {
       ? 0
       : Math.sign(offset) * (Math.abs(offset) - this.#config.deadzoneDeg);
     const span = Math.max(1, this.#config.fullLockDeg - this.#config.deadzoneDeg);
-    const target = clamp(beyondDeadzone / span, -1, 1);
+    // The sign is applied here and not to `offset`, so the centre-following above keeps tracking
+    // the angle as the device actually reports it. Only the steering output is mirrored.
+    const target = clamp(beyondDeadzone / span, -1, 1) * this.#config.direction;
     this.#value += (target - this.#value) * (1 - this.#config.smoothing);
   }
 
