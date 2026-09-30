@@ -1,8 +1,8 @@
 {
-  "name": "touchdraw-web",
+  "name": "ambotouchdraw-web",
   "version": "0.1.0",
   "private": true,
-  "description": "TouchDraw: the AEP web renderer's sample for a composed AmboPad - a touch canvas with controller buttons on it.",
+  "description": "AmboTouchDraw: the AEP web renderer's sample for a composed AmboPad - a touch canvas with controller buttons on it.",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",

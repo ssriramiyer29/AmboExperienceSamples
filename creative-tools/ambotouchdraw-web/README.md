@@ -1,10 +1,10 @@
-# TouchDraw (web)
+# AmboTouchDraw (web)
 
 Draw in a browser with a phone. The phone is both the pen and the palette.
 
 ## What this sample is for
 
-AmboRacer shows one capability driving a game. TouchDraw shows **two capabilities composed onto one
+AmboRacer shows one capability driving a game. AmboTouchDraw shows **two capabilities composed onto one
 surface**: `input.touch` is the paper and `input.controller` is the palette, and the Companion puts
 them on a single AmboPad. Where a control button is, the button gets the contact; everywhere else the
 touch surface does.
@@ -54,7 +54,7 @@ Until then, expect strokes to be stretched if the phone's pad is not roughly 2:1
 
 ```
 npm install
-npm run build      # dist/touchdraw.js, bundled, AEP included
+npm run build      # dist/ambotouchdraw.js, bundled, AEP included
 npm run typecheck
 ```
 
