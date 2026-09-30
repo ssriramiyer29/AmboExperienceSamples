@@ -1,6 +1,7 @@
 import {
-  Aep, AepExperienceDefinition, AepConnectionState, AepOrientationFrame, AepStreamState,
-  AepTouch, AepTouchGesture, type AepCapabilityEvent, type AepSession,
+  Aep, AepExperienceDefinition, AepConnectionState, AepControllerButton, AepOrientationFrame,
+  AepStreamState, AepTouchGesture,
+  type AepCapabilityEvent, type AepControllerLayout, type AepSession,
 } from "@ambokit/aep-core";
 import { AmboKitWebHost, AepPayloadJson } from "@ambokit/aep-host";
 import { WebExperienceHost } from "@ambokit/aep-web";
@@ -121,12 +122,53 @@ const ALERT_PARTICIPANT = 2;  // the phone itself is gone; only a person can fix
 let orientationFrames = 0;
 let touchEvents = 0;
 
+/**
+ * The drive-mode buttons, on the phone.
+ *
+ * This is the experience dictating its own controls. input.controller is nothing without a layout:
+ * the Companion refuses the grant outright if none arrives, so these four either appear as written
+ * or the capability is declined with a reason. There is no state where it half works.
+ *
+ * Typed as AepControllerLayout on purpose. The model is generated from the same schema the
+ * Companion validates against, so a misspelt field or a size that is not one of small/medium/large
+ * fails to compile here rather than arriving as an `invalid_config` refusal on a phone.
+ *
+ * Coordinates are fractions of the PAD, not the screen - the pad being whatever is left below the
+ * Companion's streaming strip. Stacked down the right edge so a right thumb reaches them without
+ * crossing the pad, and `small` so they leave the rest of it free: everything outside a button
+ * falls through to input.touch, where a tap pauses.
+ *
+ * Centre sits lower than the three modes because it is a different kind of action - the modes
+ * choose what steers, Centre says "this is straight ahead now". Pressing a mode button re-centres
+ * too, as a side effect of rebuilding Steering, which is what made those three usable as an
+ * accidental recovery control before this button existed.
+ */
+const DRIVE_CONTROLS: AepControllerLayout = {
+  // `orientation` is deliberately absent. The Companion parses it and nothing acts on it - the pad
+  // stays in whatever orientation the phone is held - so any value here is decoration, and the one
+  // originally written ("portrait") was decoration that happened to be wrong: the game is played
+  // landscape. Better to say nothing than to state something no code honours.
+  controls: [
+    // Spacing measured rather than guessed. The Companion sizes a control from the SHORT side of the
+    // pad - min(width, height) * 0.11, times 0.7 for `small` - and hit-tests at 1.2x that radius.
+    // On a 2293x1020 landscape pad that is a 188px hit diameter, so the 0.14 spacing first written
+    // here put the circles on top of each other and a tap near Yaw could register as Roll. 0.22
+    // clears it in landscape and is comfortable in portrait, where the short side is the width and
+    // everything is further apart anyway.
+    { id: "yaw", type: "button", label: "Yaw", x: 0.86, y: 0.10, size: "small" },
+    { id: "roll", type: "button", label: "Roll", x: 0.86, y: 0.32, size: "small" },
+    { id: "pitch", type: "button", label: "Pitch", x: 0.86, y: 0.54, size: "small" },
+    { id: "centre", type: "button", label: "Centre", x: 0.86, y: 0.80, size: "small" },
+  ],
+};
+
 const host = new AmboKitWebHost({ gatewayBaseUrl: GATEWAY });
 const session: AepSession = Aep.start(
   new AepExperienceDefinition({
     id: "com.ambokit.aep.amboracer",
     // Asked for, not assumed. The Companion decides, and the player decides after that.
-    capabilities: ["motion.orientation", "input.touch"],
+    capabilities: ["motion.orientation", "input.touch", "input.controller"],
+    capabilityConfig: { "input.controller": { layout: DRIVE_CONTROLS } },
     // The car does not need a calibrated body; it needs a level phone, and Steering captures that
     // itself. Setting this true would park the session in CALIBRATING waiting for a pose that
     // this experience never requests.
@@ -269,17 +311,39 @@ session.capabilities.event.subscribe((event: AepCapabilityEvent) => {
     return;
   }
 
+  if (event.capability === "input.controller") {
+    const button = AepControllerButton.fromMap(payload);
+    // Acted on the press, ignored on the release: these are mode switches rather than held
+    // controls, and reacting to both would switch twice per tap.
+    if (button === null || !button.pressed) return;
+    if (button.controlId === "yaw" || button.controlId === "roll" || button.controlId === "pitch") {
+      useAxis(button.controlId);
+    } else if (button.controlId === "centre") {
+      steering.recentre();
+      say("Hold the phone level. This is straight ahead.");
+    }
+    return;
+  }
+
   if (event.capability === "input.touch") {
     touchEvents += 1;
-    // Both shapes, because the generic path cannot tell them apart. input.touch emits "touch"
-    // and "gesture" events and defaults to sending both, but AepCapabilityEvent carries no event
-    // NAME - the host drops it - so a consumer has to recognise a payload by its shape. A tap
-    // arrives as a pointer going down, or as a tap gesture, or as both.
-    const touch = AepTouch.fromMap(payload);
-    if (touch !== null) {
-      if (touch.phase === "down") primaryAction();
-      return;
-    }
+    /**
+     * One tap, one action - which took a rewrite, because it was two.
+     *
+     * input.touch defaults to mode "both", so a single tap emits THREE events: a touch going down,
+     * a touch coming up, and a tap gesture. This used to act on the first and the third, so a tap
+     * paused the game and then immediately resumed it. The net effect was nothing at all, which is
+     * a hard bug to see: the control appeared dead rather than wrong.
+     *
+     * Dispatching on event.name is what makes this straightforward, and it was not possible when
+     * this code was written - the host dropped the name and a consumer had to guess a payload by
+     * its shape, which is how two shapes of the same tap both got acted on.
+     *
+     * The gesture is the right one to take, not the pointer. A pointer going down also begins every
+     * drag and swipe, so pausing on it means the game stops the instant a player starts any
+     * movement; the recogniser already tells tap and double_tap apart from those.
+     */
+    if (event.name !== "gesture") return;   // pointer events are counted above, nothing more
     const gesture = AepTouchGesture.fromMap(payload);
     if (gesture !== null && (gesture.type === "tap" || gesture.type === "double_tap")) {
       primaryAction();
