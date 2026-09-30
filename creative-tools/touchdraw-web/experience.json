@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.ambokit.aep.touchdraw",
+  "name": "TouchDraw",
+  "description": "Your phone is the pen and the palette. Drag to draw on a canvas larger than the phone, and switch to pan to move around it.",
+  "renderers": ["web"],
+  "requiresCalibration": false,
+  "capabilities": {
+    "required": ["input.touch"],
+    "optional": ["input.controller"]
+  },
+  "aep": { "minimumVersion": "0.9.0" }
+}

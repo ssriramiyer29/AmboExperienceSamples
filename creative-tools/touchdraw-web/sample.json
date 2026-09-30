@@ -1,0 +1,7 @@
+{
+  "name": "touchdraw-web",
+  "renderer": "web",
+  "aepVersion": "0.9.0",
+  "description": "Draw in a browser with a phone. The sample for a composed AmboPad: input.touch is the surface and input.controller puts the palette on top of it, both on one screen, with the palette declared by the experience rather than built into the Companion.",
+  "experienceRules": "rules"
+}
