@@ -18,6 +18,12 @@ import { SketchRenderer, type PaletteChip } from "./render.js";
  *
  * The palette is declared BY THE EXPERIENCE, not built into the Companion. Nothing in the phone
  * knows what "Undo" is; it is told where to put a button and it reports which one was pressed.
+ *
+ * Zoom has no button, and that is the right shape for it. `mode: "pointer"` delivers raw contacts
+ * rather than recognised verbs, so two fingers arrive as two pointers and a pinch is something this
+ * experience computes - which means zoom is a gesture on the paper instead of a control taking up
+ * room on it. Two fingers in Draw mode already draw two strokes, so the pinch belongs to Pan, and
+ * the modes stay exactly as separate as they were.
  */
 
 const GATEWAY = resolveGateway();
@@ -303,6 +309,8 @@ addEventListener("keydown", (event) => {
   else if (event.key === "u") sketch.undo();
   else if (event.key === "c") { sketch.clear(); say("Cleared."); }
   else if (event.key === "w") sketch.cycleWidth();
+  else if (event.key === "+" || event.key === "=") sketch.zoomBy(1.4);
+  else if (event.key === "-") sketch.zoomBy(1 / 1.4);
   else if (event.key >= "1" && event.key <= "4") sketch.pickColour(Number(event.key) - 1);
   else return;
   event.preventDefault();
@@ -331,7 +339,7 @@ const experience = new WebExperienceHost(session, () => {
   renderer.draw(snapshot, ui.canvas.width, ui.canvas.height, PALETTE, hint);
   ui.mode.textContent = snapshot.mode === "pan" ? "Pan" : "Draw";
   ui.tally.textContent = touchGranted
-    ? `${snapshot.strokes.length} strokes · ${touchEvents} touches`
+    ? `${snapshot.strokes.length} strokes · ${snapshot.zoom.toFixed(2)}x · ${touchEvents} touches`
     : "waiting for the phone's touch surface";
 });
 

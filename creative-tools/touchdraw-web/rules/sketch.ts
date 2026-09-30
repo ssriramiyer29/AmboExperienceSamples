@@ -87,6 +87,7 @@ export interface SketchSnapshot {
   readonly width: number;
   readonly colourIndex: number;
   readonly widthIndex: number;
+  readonly zoom: number;
   /**
    * Travels with the snapshot rather than being handed to the renderer separately, so a frame's
    * strokes can never be drawn against a different frame's viewport.
@@ -106,11 +107,26 @@ export class Sketch {
   /** Where each pointer was last seen, in pad units. Only used for panning, which is relative. */
   readonly #lastPad = new Map<number, Point>();
   #view: Point = { x: 0, y: 0 };
+  /**
+   * How much of the sheet the pad covers. 1 is the configured window; larger sees less.
+   *
+   * Zoom scales the window in BOTH directions by the same factor, which is not a detail: the
+   * window's aspect has to keep matching the pad's drawing area or the mapping stops being square,
+   * and a zoom that changed only one axis would do exactly that.
+   */
+  #zoom = 1;
   #mode: Mode = "draw";
   #colourIndex = 0;
   #widthIndex = 1;
   /** Which pointer owns the pan, so a second finger cannot fight the first over the view. */
   #panPointer: number | null = null;
+  /**
+   * The previous span and midpoint of a two-finger pan, or null when there is not one.
+   *
+   * Nulled whenever the number of contacts changes rather than carried across: a pinch measured
+   * from one finger's position and then continued from two would jump by the distance between them.
+   */
+  #pinch: { readonly span: number; readonly midX: number; readonly midY: number } | null = null;
 
   constructor(config: SketchConfig) {
     this.#config = config;
@@ -121,6 +137,10 @@ export class Sketch {
   }
 
   get mode(): Mode { return this.#mode; }
+  get zoom(): number { return this.#zoom; }
+  /** The window's current size, which is the configured one divided by the zoom. */
+  get viewWidth(): number { return this.#config.viewWidth / this.#zoom; }
+  get viewHeight(): number { return this.#config.viewHeight / this.#zoom; }
   get colour(): string { return this.#config.colours[this.#colourIndex] ?? "#16222e"; }
   get width(): number { return this.#config.widths[this.#widthIndex] ?? 11; }
   get config(): SketchConfig { return this.#config; }
@@ -150,6 +170,27 @@ export class Sketch {
     this.#widthIndex = (this.#widthIndex + 1) % this.#config.widths.length;
   }
 
+  /**
+   * Zooms about the centre of the window rather than a corner, so the drawing does not lurch
+   * sideways when the scale changes. The minimum is the whole sheet: below that there would be
+   * paper-coloured nothing around the edges and panning would have no meaning.
+   */
+  zoomBy(factor: number): void {
+    const centre = {
+      x: this.#view.x + this.viewWidth / 2,
+      y: this.#view.y + this.viewHeight / 2,
+    };
+    const fitSheet = Math.min(
+      this.#config.viewWidth / this.#config.canvasWidth,
+      this.#config.viewHeight / this.#config.canvasHeight,
+    );
+    this.#zoom = Math.min(4, Math.max(fitSheet, this.#zoom * factor));
+    this.#view = this.#clamp({
+      x: centre.x - this.viewWidth / 2,
+      y: centre.y - this.viewHeight / 2,
+    });
+  }
+
   /** Removes the most recent finished stroke. A stroke still under a finger is not a candidate. */
   undo(): void { this.#strokes.pop(); }
 
@@ -164,6 +205,7 @@ export class Sketch {
     this.#lastPad.set(pointerId, { x: padX, y: padY });
     if (this.#mode === "pan") {
       this.#panPointer ??= pointerId;
+      this.#pinch = null;
       return;
     }
     if (this.#strokes.length >= this.#config.maxStrokes) this.#strokes.shift();
@@ -178,6 +220,21 @@ export class Sketch {
     const previous = this.#lastPad.get(pointerId);
     this.#lastPad.set(pointerId, { x: padX, y: padY });
     if (this.#mode === "pan") {
+      // Two contacts are a pinch: the span between them is the zoom and their midpoint is the pan.
+      // Computed here rather than asked of the Companion because there is no pinch in the gesture
+      // vocabulary at all - tap, double tap, long press, swipe and drag are the whole list - so a
+      // pinch is something an experience makes out of pointers or does not have.
+      const pinch = this.#twoFingerSpan();
+      if (pinch !== null) {
+        const previousPinch = this.#pinch;
+        this.#pinch = pinch;
+        if (previousPinch !== null && previousPinch.span > 0.001 && pinch.span > 0.001) {
+          this.zoomBy(pinch.span / previousPinch.span);
+          this.panBy(pinch.midX - previousPinch.midX, pinch.midY - previousPinch.midY);
+        }
+        return;
+      }
+      this.#pinch = null;
       if (previous === undefined || this.#panPointer !== pointerId) return;
       this.panBy(padX - previous.x, padY - previous.y);
       return;
@@ -194,7 +251,23 @@ export class Sketch {
   end(pointerId: number): void {
     this.#lastPad.delete(pointerId);
     if (this.#panPointer === pointerId) this.#panPointer = null;
+    this.#pinch = null;
     this.#commit(pointerId);
+  }
+
+  /** The span and midpoint of the two lowest-numbered contacts, or null unless there are two. */
+  #twoFingerSpan(): { span: number; midX: number; midY: number } | null {
+    const ids = [...this.#lastPad.keys()].sort((a, b) => a - b);
+    const first = ids[0] === undefined ? undefined : this.#lastPad.get(ids[0]);
+    const second = ids[1] === undefined ? undefined : this.#lastPad.get(ids[1]);
+    if (first === undefined || second === undefined) return null;
+    const dx = first.x - second.x;
+    const dy = first.y - second.y;
+    return {
+      span: Math.hypot(dx, dy),
+      midX: (first.x + second.x) / 2,
+      midY: (first.y + second.y) / 2,
+    };
   }
 
   /**
@@ -208,6 +281,7 @@ export class Sketch {
     this.#active.delete(pointerId);
     this.#lastPad.delete(pointerId);
     if (this.#panPointer === pointerId) this.#panPointer = null;
+    this.#pinch = null;
   }
 
   /**
@@ -218,16 +292,16 @@ export class Sketch {
    */
   panBy(dxPad: number, dyPad: number): void {
     this.#view = this.#clamp({
-      x: this.#view.x - dxPad * this.#config.viewWidth,
-      y: this.#view.y - dyPad * this.#config.viewHeight,
+      x: this.#view.x - dxPad * this.viewWidth,
+      y: this.#view.y - dyPad * this.viewHeight,
     });
   }
 
   /** Pad coordinates (0..1 across the drawing area) to a point on the sheet. */
   toCanvas(padX: number, padY: number): Point {
     return {
-      x: this.#view.x + padX * this.#config.viewWidth,
-      y: this.#view.y + padY * this.#config.viewHeight,
+      x: this.#view.x + padX * this.viewWidth,
+      y: this.#view.y + padY * this.viewHeight,
     };
   }
 
@@ -241,11 +315,12 @@ export class Sketch {
       width: this.width,
       colourIndex: this.#colourIndex,
       widthIndex: this.#widthIndex,
+      zoom: this.#zoom,
       geometry: {
         canvasWidth: this.#config.canvasWidth,
         canvasHeight: this.#config.canvasHeight,
-        viewWidth: this.#config.viewWidth,
-        viewHeight: this.#config.viewHeight,
+        viewWidth: this.viewWidth,
+        viewHeight: this.viewHeight,
       },
     };
   }
@@ -263,8 +338,8 @@ export class Sketch {
   }
 
   #clamp(view: Point): Point {
-    const maxX = Math.max(0, this.#config.canvasWidth - this.#config.viewWidth);
-    const maxY = Math.max(0, this.#config.canvasHeight - this.#config.viewHeight);
+    const maxX = Math.max(0, this.#config.canvasWidth - this.viewWidth);
+    const maxY = Math.max(0, this.#config.canvasHeight - this.viewHeight);
     return {
       x: Math.min(Math.max(view.x, 0), maxX),
       y: Math.min(Math.max(view.y, 0), maxY),

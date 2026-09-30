@@ -14,7 +14,9 @@ what "Undo" means - it is told where to put nine buttons and reports which one w
 
 ## The phone is not the whole canvas
 
-The sheet is four padfuls: twice the window in each direction. So the pad is a window that moves,
+The sheet is four padfuls: twice the window in each direction, and zoom changes how much of it the
+pad covers - in both directions by the same factor, because the window's aspect has to keep matching
+the pad's drawing area or the mapping stops being square. Zooming out stops at the whole sheet. So the pad is a window that moves,
 which is why **draw and pan are separate modes** rather than two gestures. A finger drag is the
 entire vocabulary of a touch surface, and there is no modifier key to spend, so it means one thing
 at a time and the palette says which.
@@ -31,6 +33,7 @@ over the drawing instead of dragging the drawing along with it.
 | Clr (right edge) | `c` | Clears the sheet |
 | Blk Red Blu Grn (bottom) | `1`–`4` | Ink |
 | Nib (bottom) | `w` | Cycles thin / medium / thick |
+| Pinch with two fingers, in Pan mode | `-` / `+` | Zoom, about the centre of the window |
 
 The keyboard is not a convenience. `input.controller` is declared **optional**, and that has to be
 true rather than merely written down: a phone that refuses the palette must still leave a usable
