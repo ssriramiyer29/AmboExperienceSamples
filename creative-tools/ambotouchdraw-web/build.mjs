@@ -8,14 +8,14 @@ import { build } from "esbuild";
 const BANNER = `/**
  * GENERATED FILE - DO NOT EDIT.
  *
- * Built from AmboExperienceSamples/creative-tools/touchdraw-web/src by build.mjs.
+ * Built from AmboExperienceSamples/creative-tools/ambotouchdraw-web/src by build.mjs.
  * Edit the source there and run \`npm run build\`; changes made here are lost on the next build,
  * and a hand edit can leave calls to functions it removed.
  */`;
 
 await build({
   entryPoints: ["src/main.ts"],
-  outfile: "dist/touchdraw.js",
+  outfile: "dist/ambotouchdraw.js",
   banner: { js: BANNER },
   bundle: true,
   format: "esm",

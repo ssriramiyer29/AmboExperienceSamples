@@ -1,5 +1,5 @@
 /**
- * TouchDraw's rules: what a touch means, and where on the paper it lands.
+ * AmboTouchDraw's rules: what a touch means, and where on the paper it lands.
  *
  * No DOM here, by design and by test - `tools/check_samples.py` reads `rules/*.ts` for DOM globals
  * and fails if it finds one. The renderer owns the canvas; this file owns the drawing.

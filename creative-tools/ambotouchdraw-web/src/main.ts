@@ -8,7 +8,7 @@ import { Sketch, sketchConfig, type Mode } from "../rules/sketch.js";
 import { SketchRenderer, type PaletteChip } from "./render.js";
 
 /**
- * TouchDraw: the phone is the pen and the palette, the browser is the paper.
+ * AmboTouchDraw: the phone is the pen and the palette, the browser is the paper.
  *
  * This is the sample for a **composed AmboPad**. `input.touch` and `input.controller` are granted
  * together and the Companion puts them on one screen: where a control button is, the controller
@@ -96,7 +96,7 @@ const PALETTE_LAYOUT: AepControllerLayout = {
 };
 
 const ui = {
-  frame: query<HTMLElement>(".touchdraw"),
+  frame: query<HTMLElement>(".ambotouchdraw"),
   canvas: element<HTMLCanvasElement>("stage"),
   join: element("join"),
   qr: element<HTMLImageElement>("qr"),
@@ -167,7 +167,7 @@ let touchEvents = 0;
 const host = new AmboKitWebHost({ gatewayBaseUrl: GATEWAY });
 const session: AepSession = Aep.start(
   new AepExperienceDefinition({
-    id: "com.ambokit.aep.touchdraw",
+    id: "com.ambokit.aep.ambotouchdraw",
     capabilities: ["input.touch", "input.controller"],
     /**
      * Both capabilities are configured, and neither config is decoration.
@@ -222,7 +222,7 @@ session.player.disconnected.subscribe(() => {
 session.error.subscribe((error) => {
   if (error.code !== "capability_denied") return;
   say(error.message.includes("input.touch")
-    ? "TouchDraw needs the phone's touch surface. Allow it and scan again."
+    ? "AmboTouchDraw needs the phone's touch surface. Allow it and scan again."
     : "The palette was declined on the phone - you can still draw, and the keyboard has the tools.");
 });
 
@@ -362,5 +362,5 @@ addEventListener("beforeunload", stopExperience, { once: true });
 addEventListener("message", (event: MessageEvent) => {
   if (event.origin !== location.origin) return;
   const type = (event.data as { type?: string } | null)?.type;
-  if (type === "touchdraw:stop" || type === "ambo:stop") stopExperience();
+  if (type === "ambotouchdraw:stop" || type === "ambo:stop") stopExperience();
 });
