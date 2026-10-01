@@ -157,7 +157,7 @@ export function sceneConfig(overrides: Partial<SceneConfig> = {}): SceneConfig {
     width: 4680,
     height: 2700,
     cellSize: 180,
-    margin: 200,
+    margin: 300,
     jitter: 0.3,
     roles: ["baker", "butcher", "farmer", "fisher", "nurse", "painter", "sailor", "teacher"],
     accessories: ["hat", "shirt", "scarf", "apron", "bag"],
@@ -341,7 +341,7 @@ export interface AimConfig {
 
 export function aimConfig(overrides: Partial<AimConfig> = {}): AimConfig {
   return {
-    lensRadius: 190,
+    lensRadius: 280,
     yawSpanDeg: 70,
     pitchSpanDeg: 50,
     invertYaw: false,
