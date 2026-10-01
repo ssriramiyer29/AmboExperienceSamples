@@ -87,6 +87,11 @@ function checkSubject(name, svg) {
   if (/id\s*=\s*"tint"/.test(svg)) {
     fail(name, 'has id="tint" - colour belongs to the item, never the person');
   }
+  // Without a shadow an actor floats on the painted background, which is the single thing that
+  // gives away a composed scene. Its own group so the renderer can soften it against the ground.
+  if (!/<g[^>]*\bid\s*=\s*"shadow"/.test(svg)) {
+    fail(name, 'no <g id="shadow"> - an actor with no ground shadow floats on the background');
+  }
 }
 
 function checkTrait(name, svg) {
@@ -151,6 +156,7 @@ function selfTest() {
     ["a sleeve, which is not the hand", "trait", '<svg viewBox="0 0 200 300"><g id="tint"><rect x="138" y="142" width="18" height="34" fill="currentColor"/></g></svg>', null],
     ["wrong viewBox", "trait", '<svg viewBox="0 0 100 100"><g id="tint"><rect x="10" y="10" width="8" height="8" fill="currentColor"/></g></svg>', /must be "0 0 200 300"/],
     ["text in the art", "subject", '<svg viewBox="0 0 200 300"><text x="10" y="10">baker</text></svg>', /contains text/],
+    ["a subject with no shadow", "subject", '<svg viewBox="0 0 200 300"><circle cx="100" cy="100" r="30" fill="#e8c9a8"/></svg>', /floats on the background/],
     ["tinted subject", "subject", '<svg viewBox="0 0 200 300"><g id="tint"><rect x="1" y="1" width="1" height="1" fill="currentColor"/></g></svg>', /never the person/],
     ["a gradient", "subject", '<svg viewBox="0 0 200 300"><linearGradient id="g"/></svg>', /flat fills only/],
     ["an external image", "subject", '<svg viewBox="0 0 200 300"><image href="https://example.com/x.png"/></svg>', /raster|off the page/],
@@ -167,13 +173,17 @@ function selfTest() {
     if (!ok) { bad += 1; console.log(`      got: ${problems.join(" | ") || "(nothing)"}`); }
   }
   // And the mirror: conformant art must pass, or the gate is just a wall.
-  problems.length = 0;
-  const good = '<svg viewBox="0 0 200 300"><g id="tint"><rect x="62" y="128" width="76" height="72" fill="currentColor"/></g><rect x="66" y="196" width="8" height="10" fill="#6b5848"/></svg>';
-  checkCommon("a conformant trait", good, Buffer.byteLength(good));
-  checkTrait("a conformant trait", good);
-  const clean = problems.length === 0;
-  console.log(`${clean ? "ok  " : "FAIL"}  a conformant trait is accepted`);
-  if (!clean) { bad += 1; console.log(`      got: ${problems.join(" | ")}`); }
+  for (const [label, kind, svg] of [
+    ["a conformant trait", "trait", '<svg viewBox="0 0 200 300"><g id="tint"><rect x="62" y="128" width="76" height="72" fill="currentColor"/></g><rect x="66" y="196" width="8" height="10" fill="#6b5848"/></svg>'],
+    ["a conformant subject", "subject", '<svg viewBox="0 0 200 300"><g id="shadow"><ellipse cx="100" cy="292" rx="42" ry="8" fill="#16222e"/></g><circle cx="100" cy="104" r="34" fill="#e8c9a8"/></svg>'],
+  ]) {
+    problems.length = 0;
+    checkCommon(label, svg, Buffer.byteLength(svg));
+    if (kind === "subject") checkSubject(label, svg); else checkTrait(label, svg);
+    const clean = problems.length === 0;
+    console.log(`${clean ? "ok  " : "FAIL"}  ${label} is accepted`);
+    if (!clean) { bad += 1; console.log(`      got: ${problems.join(" | ")}`); }
+  }
   console.log(bad === 0 ? "\nevery check is negative-tested." : `\n${bad} check(s) did not work.`);
   return bad === 0 ? 0 : 1;
 }

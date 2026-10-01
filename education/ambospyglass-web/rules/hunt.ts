@@ -370,6 +370,103 @@ export function buildScene(config: SceneConfig = sceneConfig(), random: () => nu
   return { width: config.width, height: config.height, characters, target: targetCharacter };
 }
 
+/* ------------------------------------------------------------------ a painted scene */
+
+/**
+ * A scene that was painted rather than generated.
+ *
+ * `buildScene` above guarantees the near-misses by construction, because it places them. A painting
+ * contains whatever the illustrator painted, so the guarantee moves here: the annotation says what
+ * is findable and where, and `nearMissesFor` reports - per clause - whether the picture can
+ * actually hold a prompt to account. That report is advisory at runtime and a gate at build time,
+ * which is the only honest arrangement when the data is drawn by hand.
+ */
+export interface SceneAnnotation {
+  readonly id: string;
+  readonly name: string;
+  /** The painted file, relative to the sample. The rules never load it; the renderer does. */
+  readonly image: string;
+  readonly width: number;
+  readonly height: number;
+  readonly findables: readonly AnnotatedFindable[];
+}
+
+export interface AnnotatedFindable extends Combination {
+  /** Centre of the thing in the painting, in the painting's own pixels. */
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Turns an annotation into the same Scene the generator produces, so Hunt cannot tell them apart.
+ *
+ * The target is chosen rather than taken: a painted scene offers several candidates and they are
+ * not equally good. `preferTarget` picks one by id for a fixed demo; otherwise the candidate with
+ * the most clauses covered by a near-miss wins, falling back to any unique combination.
+ */
+export function sceneFromAnnotation(
+  annotation: SceneAnnotation,
+  preferTarget?: number,
+  random: () => number = seededRandom(20261001),
+): Scene {
+  const characters: Character[] = annotation.findables.map((findable, index) => ({
+    id: index,
+    x: findable.x,
+    y: findable.y,
+    pose: random(),
+    subject: findable.subject,
+    trait: findable.trait,
+    colour: findable.colour,
+  }));
+  if (characters.length === 0) throw new Error(`${annotation.id}: annotation lists nothing findable`);
+
+  const unique = characters.filter(
+    (candidate) => characters.filter((other) => sameCombination(other, candidate)).length === 1,
+  );
+  if (unique.length === 0) {
+    // Every findable has a twin, so no prompt in this scene has one right answer.
+    throw new Error(`${annotation.id}: no findable is uniquely described by subject, trait and colour`);
+  }
+
+  let target = unique[0] as Character;
+  if (preferTarget !== undefined) {
+    const chosen = characters.find((c) => c.id === preferTarget);
+    if (chosen === undefined) throw new Error(`${annotation.id}: no findable with id ${preferTarget}`);
+    if (!unique.includes(chosen)) throw new Error(`${annotation.id}: findable ${preferTarget} is not unique`);
+    target = chosen;
+  } else {
+    let best = -1;
+    for (const candidate of unique) {
+      const report = nearMissesFor(characters, candidate);
+      const covered = CLAUSES.filter((clause) => (report[clause] ?? 0) > 0).length;
+      if (covered > best) { best = covered; target = candidate; }
+    }
+  }
+  return { width: annotation.width, height: annotation.height, characters, target };
+}
+
+/**
+ * How many near-misses the scene holds for each clause of this target.
+ *
+ * A zero means a prompt naming that target can be won without reading that clause - spot the only
+ * monkey and the colour never mattered. For a generated scene this is guaranteed non-zero; for a
+ * painted one it is a measurement, and the number is what the illustrator's brief is held to.
+ */
+export function nearMissesFor(
+  characters: readonly Character[],
+  target: Combination,
+): Readonly<Record<Clause, number>> {
+  const report: Record<Clause, number> = { subject: 0, trait: 0, colour: 0 };
+  for (const character of characters) {
+    const missed = missedClauses(target, character);
+    if (missed.length === 1) {
+      const only = missed[0];
+      if (only !== undefined) report[only] += 1;
+    }
+  }
+  return report;
+}
+
 /* ------------------------------------------------------------------ aiming */
 
 export interface AimConfig {

@@ -16,6 +16,7 @@ import {
   CLAUSES, Hunt, SPANISH, aimConfig, angleDelta, buildScene, missedClauses,
   promptText, reachableMargin, sceneConfig, seededRandom, type Clause, type Combination,
   JOBS, LANGUAGES, agree, doesText, HINDI, KANNADA, ENGLISH,
+  sceneFromAnnotation, nearMissesFor, type SceneAnnotation,
 } from "../rules/hunt.ts";
 
 const SEEDS = [1, 2, 7, 42, 1337, 20261001, 0xdeadbeef];
@@ -466,4 +467,65 @@ test("the timer stops when the target is found and not before", () => {
   hunt.tick(10000);
   assert.equal(hunt.snapshot().finished, true);
   assert.equal(hunt.snapshot().elapsedMs, 1600, "time kept running after the hunt was over");
+});
+
+/* ---------------------------------------------------------------- painted scenes */
+
+const MARKET: SceneAnnotation = {
+  id: "market", name: "The market", image: "scenes/market.png", width: 3840, height: 2160,
+  findables: [
+    { x: 400, y: 1200, subject: "baker", trait: "apron", colour: "white" },
+    { x: 900, y: 1300, subject: "butcher", trait: "apron", colour: "white" },   // off on subject
+    { x: 1400, y: 1100, subject: "baker", trait: "scarf", colour: "white" },    // off on trait
+    { x: 1900, y: 1250, subject: "baker", trait: "apron", colour: "red" },      // off on colour
+    { x: 2400, y: 1400, subject: "nurse", trait: "bag", colour: "blue" },
+  ],
+};
+
+test("a painted scene becomes the same Scene the generator makes", () => {
+  const scene = sceneFromAnnotation(MARKET);
+  assert.equal(scene.characters.length, 5);
+  assert.equal(scene.width, 3840);
+  // Hunt must not be able to tell the difference - that is the whole point of the annotation.
+  const hunt = new Hunt(scene, aimConfig({ followSeconds: 0, lensRadius: 300 }));
+  hunt.nudge((scene.target.x - hunt.snapshot().lens.x) / scene.width, (scene.target.y - hunt.snapshot().lens.y) / scene.height);
+  hunt.tick(16);
+  assert.equal(hunt.claim().kind, "correct");
+});
+
+test("the chosen target is the one the painting can actually hold to account", () => {
+  // The baker in the white apron is the only candidate with a near-miss on all three clauses.
+  const scene = sceneFromAnnotation(MARKET);
+  assert.deepEqual(
+    { subject: scene.target.subject, trait: scene.target.trait, colour: scene.target.colour },
+    { subject: "baker", trait: "apron", colour: "white" },
+  );
+  assert.deepEqual(nearMissesFor(scene.characters, scene.target), { subject: 1, trait: 1, colour: 1 });
+});
+
+test("a clause with no near-miss is reported rather than hidden", () => {
+  // The nurse is unique but nothing in the scene is one clause away from her, so a prompt naming
+  // her is won by spotting the only nurse and the other two words never have to be read.
+  const report = nearMissesFor(sceneFromAnnotation(MARKET).characters,
+    { subject: "nurse", trait: "bag", colour: "blue" });
+  assert.deepEqual(report, { subject: 0, trait: 0, colour: 0 });
+});
+
+test("a fixed target can be pinned for a demo", () => {
+  const scene = sceneFromAnnotation(MARKET, 4);
+  assert.equal(scene.target.subject, "nurse");
+});
+
+test("an annotation with no uniquely described findable is refused", () => {
+  assert.throws(() => sceneFromAnnotation({
+    ...MARKET,
+    findables: [
+      { x: 10, y: 10, subject: "baker", trait: "apron", colour: "red" },
+      { x: 20, y: 20, subject: "baker", trait: "apron", colour: "red" },
+    ],
+  }), /uniquely described/);
+});
+
+test("an empty annotation is refused", () => {
+  assert.throws(() => sceneFromAnnotation({ ...MARKET, findables: [] }), /nothing findable/);
 });
