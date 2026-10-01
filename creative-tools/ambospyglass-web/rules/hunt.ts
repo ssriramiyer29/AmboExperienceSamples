@@ -29,14 +29,14 @@
  * butcher in a red hat means the noun was. A string key would let a typo silently open a fourth
  * bucket that nothing ever reports.
  */
-export type Clause = "role" | "accessory" | "colour";
+export type Clause = "subject" | "trait" | "colour";
 
-export const CLAUSES: readonly Clause[] = ["role", "accessory", "colour"];
+export const CLAUSES: readonly Clause[] = ["subject", "trait", "colour"];
 
 /** What the prompt describes and what the crowd is drawn from, as ids rather than words. */
 export interface Combination {
-  readonly role: string;
-  readonly accessory: string;
+  readonly subject: string;
+  readonly trait: string;
   readonly colour: string;
 }
 
@@ -59,17 +59,26 @@ export interface Scene {
 
 /* ------------------------------------------------------------------ the words */
 
-/** A noun carries its article and gender, because the adjective has to agree with it. */
+/**
+ * A noun carries its article and its gender, because the adjective has to agree with it.
+ *
+ * `gender` is a free string rather than "m" | "f": German has three, Hindi's adjectives agree with
+ * two but many are invariant, and a union fixed to the first language added would have to be
+ * widened by every language after it. The only contract is that it keys into `Adjective`.
+ * An article of "" is normal - several languages have none.
+ */
 export interface Noun {
   readonly article: string;
   readonly word: string;
-  readonly gender: "m" | "f";
+  readonly gender: string;
 }
 
-/** Both forms, so agreement is data rather than a rule the renderer would have to know. */
+/**
+ * One form per gender, plus an optional fallback for the many colours that do not inflect at all.
+ * Agreement is data rather than a rule the renderer would have to know in each language.
+ */
 export interface Adjective {
-  readonly m: string;
-  readonly f: string;
+  readonly [gender: string]: string | undefined;
 }
 
 /**
@@ -80,41 +89,83 @@ export interface Adjective {
  */
 export interface Lexicon {
   readonly code: string;
+  /** How this language names itself, for the picker. Never the English name. */
+  readonly name: string;
+  /**
+   * The sentence, as a template, because word order is part of a language and not a constant.
+   *
+   * Spanish puts the colour after the noun; Hindi puts it before and the verb at the end. Building
+   * the sentence in code would have meant one language's grammar hardcoded and every other
+   * language bent to fit it. Placeholders: {find} {subjectArticle} {subject} {with} {traitArticle}
+   * {trait} {colour}. Runs of spaces left by an empty article are collapsed.
+   */
+  readonly pattern: string;
   readonly find: string;
-  /** The preposition that joins a person to what they are wearing or carrying. */
+  /** The word joining a person to what they are wearing or carrying. May be empty. */
   readonly with: string;
-  readonly roles: Readonly<Record<string, Noun>>;
-  readonly accessories: Readonly<Record<string, Noun>>;
+  readonly subjects: Readonly<Record<string, Noun>>;
+  readonly traits: Readonly<Record<string, Noun>>;
   readonly colours: Readonly<Record<string, Adjective>>;
+  /**
+   * What each profession actually does, in the target language.
+   *
+   * Said when the person finds them, which is the moment the word has just been earned - the
+   * sentence lands on a picture they are already looking at rather than on a vocabulary list.
+   */
+  readonly does: Readonly<Record<string, string>>;
+  readonly praise: string;
+  readonly again: string;
   /** English, for the gloss a beginner is allowed to reveal. Keyed by the same ids. */
   readonly gloss: Readonly<Record<string, string>>;
+}
+
+/** The adjective form agreeing with `gender`, falling back to an invariant form. */
+export function agree(adjective: Adjective, gender: string): string {
+  return adjective[gender] ?? adjective["*"] ?? Object.values(adjective)[0] ?? "";
 }
 
 /**
  * Assembles the prompt with the colour agreeing with the ACCESSORY, not the person.
  *
  * This is the grammar the game actually teaches, and it is why the colour attaches to the
- * accessory rather than to the role: "el panadero con la camisa roja" against "con el sombrero
+ * accessory rather than to the subject: "el panadero con la camisa roja" against "con el sombrero
  * rojo" puts agreement on the line in every single prompt, where a textbook puts it in one
  * exercise. A learner who ignores the ending still finds the right person - but they will have
  * read past the one thing the sentence was built to teach.
  */
 export function promptText(lexicon: Lexicon, combination: Combination): string {
-  const role = lexicon.roles[combination.role];
-  const accessory = lexicon.accessories[combination.accessory];
+  const subject = lexicon.subjects[combination.subject];
+  const trait = lexicon.traits[combination.trait];
   const colour = lexicon.colours[combination.colour];
-  if (role === undefined || accessory === undefined || colour === undefined) {
+  if (subject === undefined || trait === undefined || colour === undefined) {
     // An id with no word is a content bug, not a runtime condition to style around. Saying which
     // id is missing beats a sentence with a hole in it that a tester reports as "looks wrong".
-    return `[no words for ${combination.role}/${combination.accessory}/${combination.colour}]`;
+    return `[no words for ${combination.subject}/${combination.trait}/${combination.colour}]`;
   }
-  const agreed = accessory.gender === "f" ? colour.f : colour.m;
-  return `${lexicon.find} ${role.article} ${role.word} ${lexicon.with} ${accessory.article} ${accessory.word} ${agreed}`;
+  const filled: Record<string, string> = {
+    find: lexicon.find,
+    subjectArticle: subject.article,
+    subject: subject.word,
+    with: lexicon.with,
+    traitArticle: trait.article,
+    trait: trait.word,
+    colour: agree(colour, trait.gender),
+  };
+  return lexicon.pattern
+    .replace(/\{(\w+)\}/g, (_, key: string) => filled[key] ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.!?])/g, "$1")
+    .trim();
+}
+
+/** What the found profession does, in the target language. Empty when the language has not said. */
+export function doesText(lexicon: Lexicon, subjectId: string): string {
+  return lexicon.does[subjectId] ?? "";
 }
 
 /** The English the hint button reveals, assembled from the same ids. */
 export function glossText(lexicon: Lexicon, combination: Combination): string {
-  const parts = [combination.role, combination.accessory, combination.colour]
+  const parts = [combination.subject, combination.trait, combination.colour]
     .map((id) => lexicon.gloss[id] ?? id);
   return `the ${parts[0]} with the ${parts[2]} ${parts[1]}`;
 }
@@ -141,7 +192,7 @@ export interface SceneConfig {
   readonly margin: number;
   /** How far from its cell centre a character may stray, as a fraction of the cell. */
   readonly jitter: number;
-  readonly roles: readonly string[];
+  readonly subjects: readonly string[];
   /**
    * Body items only, and never headwear.
    *
@@ -151,7 +202,7 @@ export interface SceneConfig {
    * prompt would contradict the picture. The accessory is what takes the colour; the role's
    * headwear and tool stay in ink.
    */
-  readonly accessories: readonly string[];
+  readonly traits: readonly string[];
   readonly colours: readonly string[];
   /**
    * How many near-misses each clause gets: characters matching the target on the other two and
@@ -168,9 +219,9 @@ export function sceneConfig(overrides: Partial<SceneConfig> = {}): SceneConfig {
     cellSize: 180,
     margin: 300,
     jitter: 0.3,
-    roles: ["baker", "butcher", "farmer", "fisher", "nurse", "painter", "sailor", "teacher"],
-    accessories: ["shirt", "scarf", "apron", "bag", "umbrella"],
-    colours: ["red", "blue", "green", "yellow", "white", "black"],
+    subjects: JOBS.subjects,
+    traits: JOBS.traits,
+    colours: JOBS.colours,
     decoysPerClause: 3,
     ...overrides,
   };
@@ -197,7 +248,7 @@ function pick<T>(items: readonly T[], random: () => number): T {
 }
 
 function sameCombination(a: Combination, b: Combination): boolean {
-  return a.role === b.role && a.accessory === b.accessory && a.colour === b.colour;
+  return a.subject === b.subject && a.trait === b.trait && a.colour === b.colour;
 }
 
 /** Which clauses the claimed character got wrong, in a stable order. */
@@ -231,8 +282,8 @@ export function buildScene(config: SceneConfig = sceneConfig(), random: () => nu
   }
 
   const target: Combination = {
-    role: pick(config.roles, random),
-    accessory: pick(config.accessories, random),
+    subject: pick(config.subjects, random),
+    trait: pick(config.traits, random),
     colour: pick(config.colours, random),
   };
 
@@ -265,8 +316,8 @@ export function buildScene(config: SceneConfig = sceneConfig(), random: () => nu
     let combination: Combination;
     do {
       combination = {
-        role: pick(config.roles, random),
-        accessory: pick(config.accessories, random),
+        subject: pick(config.subjects, random),
+        trait: pick(config.traits, random),
         colour: pick(config.colours, random),
       };
     } while (sameCombination(combination, target));
@@ -285,8 +336,8 @@ export function buildScene(config: SceneConfig = sceneConfig(), random: () => nu
   };
 
   const alternatives: Record<Clause, readonly string[]> = {
-    role: config.roles,
-    accessory: config.accessories,
+    subject: config.subjects,
+    trait: config.traits,
     colour: config.colours,
   };
 
@@ -400,6 +451,18 @@ export interface HuntSnapshot {
   readonly attempts: number;
   /** The teaching instrument: which clause each wrong claim lost, counted. */
   readonly misses: Readonly<Record<Clause, number>>;
+  /**
+   * How long this hunt has been running, accumulated from the frame deltas rather than read from
+   * a clock - so the rules stay testable without pretending to be one, and so a paused renderer
+   * does not quietly count time the person was not playing.
+   *
+   * Time to find is the better half of the score. It measures fluency - how fast the sentence was
+   * parsed - where the clause counts measure which word was not known. Speed alone would reward
+   * tapping fast and guessing, so both are kept and neither is reported without the other.
+   */
+  readonly elapsedMs: number;
+  /** Stops once the target is found, so the panel that follows does not inflate the time. */
+  readonly finished: boolean;
   readonly lastVerdict: Verdict | null;
 }
 
@@ -431,7 +494,9 @@ export class Hunt {
 
   #found = 0;
   #attempts = 0;
-  readonly #misses: Record<Clause, number> = { role: 0, accessory: 0, colour: 0 };
+  #elapsedMs = 0;
+  #finished = false;
+  readonly #misses: Record<Clause, number> = { subject: 0, trait: 0, colour: 0 };
   #lastVerdict: Verdict | null = null;
 
   constructor(scene: Scene, config: AimConfig = aimConfig()) {
@@ -505,9 +570,10 @@ export class Hunt {
     this.recentre();
   }
 
-  /** Eases the lens toward the aim. `dtMs` is the renderer's frame delta. */
+  /** Eases the lens toward the aim, and counts the hunt. `dtMs` is the renderer's frame delta. */
   tick(dtMs: number): void {
     const seconds = Math.max(0, dtMs) / 1000;
+    if (!this.#finished) this.#elapsedMs += Math.max(0, dtMs);
     // 1 - e^(-dt/tau): the fraction of the remaining distance to cover this frame. Frame-rate
     // independent, unlike a fixed per-frame fraction, which would drift faster on a faster screen.
     const alpha = this.#config.followSeconds <= 0 ? 1 : 1 - Math.exp(-seconds / this.#config.followSeconds);
@@ -540,6 +606,7 @@ export class Hunt {
     const missed = missedClauses(this.#scene.target, best);
     if (missed.length === 0) {
       this.#found += 1;
+      this.#finished = true;
       this.#lastVerdict = { kind: "correct", character: best };
       return this.#lastVerdict;
     }
@@ -564,6 +631,8 @@ export class Hunt {
       found: this.#found,
       attempts: this.#attempts,
       misses: { ...this.#misses },
+      elapsedMs: this.#elapsedMs,
+      finished: this.#finished,
       lastVerdict: this.#lastVerdict,
     };
   }
@@ -576,17 +645,45 @@ export class Hunt {
   }
 }
 
-/* ------------------------------------------------------------------ one language, as data */
+/* ------------------------------------------------------------------ topics and languages */
 
 /**
- * Spanish, as the shipped example. Swapping this object is the whole cost of another language,
- * which is the reason the words are not in the code above.
+ * A topic is the three axes, named. Nothing else about the game changes between topics: the decoy
+ * guarantee, the clause diagnosis and the lens all work on subject/trait/colour whatever those
+ * happen to mean. Jobs is baker x apron x red; animals would be tiger x collar x red; actions
+ * would be girl x running x red.
+ *
+ * What a topic does NOT carry is the drawing. A renderer needs one picture per subject and one per
+ * trait - thirteen drawings for this topic, not the hundreds the crowd appears to contain, which
+ * is the whole economy of generating the crowd from a grid.
  */
+export interface Topic {
+  readonly id: string;
+  readonly subjects: readonly string[];
+  readonly traits: readonly string[];
+  readonly colours: readonly string[];
+}
+
+export const JOBS: Topic = {
+  id: "jobs",
+  subjects: ["baker", "butcher", "farmer", "fisher", "nurse", "painter", "sailor", "teacher"],
+  traits: ["shirt", "scarf", "apron", "bag", "umbrella"],
+  colours: ["red", "blue", "green", "yellow", "white", "black"],
+};
+
+/** English, shared by every lexicon: it is the gloss, not one of the languages on offer. */
+const GLOSS: Readonly<Record<string, string>> = {
+  baker: "baker", butcher: "butcher", farmer: "farmer", fisher: "fisherman",
+  nurse: "nurse", painter: "painter", sailor: "sailor", teacher: "teacher",
+  shirt: "shirt", scarf: "scarf", apron: "apron", bag: "bag", umbrella: "umbrella",
+  red: "red", blue: "blue", green: "green", yellow: "yellow", white: "white", black: "black",
+};
+
+const ROMANCE = "{find} {subjectArticle} {subject} {with} {traitArticle} {trait} {colour}";
+
 export const SPANISH: Lexicon = {
-  code: "es-ES",
-  find: "Encuentra",
-  with: "con",
-  roles: {
+  code: "es-ES", name: "Espanol", pattern: ROMANCE, find: "Encuentra", with: "con",
+  subjects: {
     baker: { article: "al", word: "panadero", gender: "m" },
     butcher: { article: "al", word: "carnicero", gender: "m" },
     farmer: { article: "al", word: "granjero", gender: "m" },
@@ -596,7 +693,7 @@ export const SPANISH: Lexicon = {
     sailor: { article: "al", word: "marinero", gender: "m" },
     teacher: { article: "al", word: "maestro", gender: "m" },
   },
-  accessories: {
+  traits: {
     shirt: { article: "la", word: "camisa", gender: "f" },
     scarf: { article: "la", word: "bufanda", gender: "f" },
     apron: { article: "el", word: "delantal", gender: "m" },
@@ -604,17 +701,101 @@ export const SPANISH: Lexicon = {
     umbrella: { article: "el", word: "paraguas", gender: "m" },
   },
   colours: {
-    red: { m: "rojo", f: "roja" },
-    blue: { m: "azul", f: "azul" },
-    green: { m: "verde", f: "verde" },
-    yellow: { m: "amarillo", f: "amarilla" },
-    white: { m: "blanco", f: "blanca" },
+    red: { m: "rojo", f: "roja" }, blue: { "*": "azul" }, green: { "*": "verde" },
+    yellow: { m: "amarillo", f: "amarilla" }, white: { m: "blanco", f: "blanca" },
     black: { m: "negro", f: "negra" },
   },
-  gloss: {
-    baker: "baker", butcher: "butcher", farmer: "farmer", fisher: "fisherman",
-    nurse: "nurse", painter: "painter", sailor: "sailor", teacher: "teacher",
-    shirt: "shirt", scarf: "scarf", apron: "apron", bag: "bag", umbrella: "umbrella",
-    red: "red", blue: "blue", green: "green", yellow: "yellow", white: "white", black: "black",
+  does: {
+    baker: "El panadero hace pan.", butcher: "El carnicero corta la carne.",
+    farmer: "El granjero cultiva la tierra.", fisher: "El pescador pesca en el mar.",
+    nurse: "La enfermera cuida a los enfermos.", painter: "El pintor pinta cuadros.",
+    sailor: "El marinero navega en un barco.", teacher: "El maestro ensena a los ninos.",
   },
+  praise: "Muy bien!", again: "Otra vez?", gloss: GLOSS,
 };
+
+export const FRENCH: Lexicon = {
+  code: "fr-FR", name: "Francais", pattern: ROMANCE, find: "Trouve", with: "avec",
+  subjects: {
+    baker: { article: "le", word: "boulanger", gender: "m" },
+    butcher: { article: "le", word: "boucher", gender: "m" },
+    farmer: { article: "le", word: "fermier", gender: "m" },
+    fisher: { article: "le", word: "pecheur", gender: "m" },
+    // The article is folded into the word where the language elides it, rather than teaching the
+    // template about apostrophes - which would be one language's spelling rule in everyone's code.
+    nurse: { article: "", word: "l'infirmiere", gender: "f" },
+    painter: { article: "le", word: "peintre", gender: "m" },
+    sailor: { article: "le", word: "marin", gender: "m" },
+    teacher: { article: "le", word: "maitre", gender: "m" },
+  },
+  traits: {
+    shirt: { article: "la", word: "chemise", gender: "f" },
+    scarf: { article: "", word: "l'echarpe", gender: "f" },
+    apron: { article: "le", word: "tablier", gender: "m" },
+    bag: { article: "le", word: "sac", gender: "m" },
+    umbrella: { article: "le", word: "parapluie", gender: "m" },
+  },
+  colours: {
+    red: { "*": "rouge" }, blue: { m: "bleu", f: "bleue" }, green: { m: "vert", f: "verte" },
+    yellow: { "*": "jaune" }, white: { m: "blanc", f: "blanche" }, black: { m: "noir", f: "noire" },
+  },
+  does: {
+    baker: "Le boulanger fait du pain.", butcher: "Le boucher coupe la viande.",
+    farmer: "Le fermier cultive la terre.", fisher: "Le pecheur peche dans la mer.",
+    nurse: "L'infirmiere soigne les malades.", painter: "Le peintre peint des tableaux.",
+    sailor: "Le marin navigue sur un bateau.", teacher: "Le maitre enseigne aux enfants.",
+  },
+  praise: "Tres bien!", again: "Encore?", gloss: GLOSS,
+};
+
+/**
+ * Hindi, and the reason the pattern had to become data: the colour comes before the noun, the
+ * postposition follows it, and the verb is last. No article at all, which the template handles by
+ * collapsing the empty one.
+ *
+ * NOT yet checked by a native speaker - the grammar here is the structure being proven, and the
+ * wording should be read by someone who speaks it before this goes in front of anybody.
+ */
+export const HINDI: Lexicon = {
+  code: "hi-IN", name: "\u0939\u093f\u0928\u094d\u0926\u0940",
+  pattern: "{colour} {trait} {with} {subject} \u0915\u094b {find}",
+  find: "\u0922\u0942\u0902\u0922\u094b", with: "\u0935\u093e\u0932\u0947",
+  subjects: {
+    baker: { article: "", word: "\u0928\u093e\u0928\u092c\u093e\u0908", gender: "m" },
+    butcher: { article: "", word: "\u0915\u0938\u093e\u0908", gender: "m" },
+    farmer: { article: "", word: "\u0915\u093f\u0938\u093e\u0928", gender: "m" },
+    fisher: { article: "", word: "\u092e\u091b\u0941\u0906\u0930\u093e", gender: "m" },
+    nurse: { article: "", word: "\u0928\u0930\u094d\u0938", gender: "f" },
+    painter: { article: "", word: "\u091a\u093f\u0924\u094d\u0930\u0915\u093e\u0930", gender: "m" },
+    sailor: { article: "", word: "\u0928\u093e\u0935\u093f\u0915", gender: "m" },
+    teacher: { article: "", word: "\u0936\u093f\u0915\u094d\u0937\u0915", gender: "m" },
+  },
+  traits: {
+    shirt: { article: "", word: "\u0915\u092e\u0940\u095b", gender: "f" },
+    scarf: { article: "", word: "\u0938\u094d\u0915\u093e\u0930\u094d\u095e", gender: "m" },
+    apron: { article: "", word: "\u090f\u092a\u094d\u0930\u0928", gender: "m" },
+    bag: { article: "", word: "\u092c\u0948\u0917", gender: "m" },
+    umbrella: { article: "", word: "\u091b\u093e\u0924\u093e", gender: "m" },
+  },
+  colours: {
+    red: { "*": "\u0932\u093e\u0932" },
+    blue: { m: "\u0928\u0940\u0932\u093e", f: "\u0928\u0940\u0932\u0940" },
+    green: { m: "\u0939\u0930\u093e", f: "\u0939\u0930\u0940" },
+    yellow: { m: "\u092a\u0940\u0932\u093e", f: "\u092a\u0940\u0932\u0940" },
+    white: { "*": "\u0938\u095e\u0947\u0926" },
+    black: { m: "\u0915\u093e\u0932\u093e", f: "\u0915\u093e\u0932\u0940" },
+  },
+  does: {
+    baker: "\u0928\u093e\u0928\u092c\u093e\u0908 \u0930\u094b\u091f\u0940 \u092c\u0928\u093e\u0924\u093e \u0939\u0948\u0964",
+    butcher: "\u0915\u0938\u093e\u0908 \u092e\u093e\u0902\u0938 \u0915\u093e\u091f\u0924\u093e \u0939\u0948\u0964",
+    farmer: "\u0915\u093f\u0938\u093e\u0928 \u0916\u0947\u0924\u0940 \u0915\u0930\u0924\u093e \u0939\u0948\u0964",
+    fisher: "\u092e\u091b\u0941\u0906\u0930\u093e \u092e\u091b\u0932\u0940 \u092a\u0915\u0921\u093c\u0924\u093e \u0939\u0948\u0964",
+    nurse: "\u0928\u0930\u094d\u0938 \u092e\u0930\u0940\u095b\u094b\u0902 \u0915\u0940 \u0926\u0947\u0916\u092d\u093e\u0932 \u0915\u0930\u0924\u0940 \u0939\u0948\u0964",
+    painter: "\u091a\u093f\u0924\u094d\u0930\u0915\u093e\u0930 \u0924\u0938\u094d\u0935\u0940\u0930\u0947\u0902 \u092c\u0928\u093e\u0924\u093e \u0939\u0948\u0964",
+    sailor: "\u0928\u093e\u0935\u093f\u0915 \u091c\u0939\u093e\u095b \u091a\u0932\u093e\u0924\u093e \u0939\u0948\u0964",
+    teacher: "\u0936\u093f\u0915\u094d\u0937\u0915 \u092c\u091a\u094d\u091a\u094b\u0902 \u0915\u094b \u092a\u0922\u093c\u093e\u0924\u093e \u0939\u0948\u0964",
+  },
+  praise: "\u0936\u093e\u092c\u093e\u0936!", again: "\u092b\u093f\u0930 \u0938\u0947?", gloss: GLOSS,
+};
+
+export const LANGUAGES: readonly Lexicon[] = [SPANISH, FRENCH, HINDI];

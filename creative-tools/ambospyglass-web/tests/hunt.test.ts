@@ -15,16 +15,17 @@ import assert from "node:assert/strict";
 import {
   CLAUSES, Hunt, SPANISH, aimConfig, angleDelta, buildScene, glossText, missedClauses,
   promptText, reachableMargin, sceneConfig, seededRandom, type Clause, type Combination,
+  JOBS, LANGUAGES, agree, doesText, HINDI,
 } from "../rules/hunt.ts";
 
 const SEEDS = [1, 2, 7, 42, 1337, 20261001, 0xdeadbeef];
 
 function combinationOf(c: Combination): Combination {
-  return { role: c.role, accessory: c.accessory, colour: c.colour };
+  return { subject: c.subject, trait: c.trait, colour: c.colour };
 }
 
 function same(a: Combination, b: Combination): boolean {
-  return a.role === b.role && a.accessory === b.accessory && a.colour === b.colour;
+  return a.subject === b.subject && a.trait === b.trait && a.colour === b.colour;
 }
 
 test("the target combination appears exactly once, on every seed", () => {
@@ -99,25 +100,25 @@ test("every single character can be claimed by aiming at it", () => {
 test("the adjective agrees with the accessory, not the person", () => {
   // camisa is feminine, sombrero masculine. The same colour, the same role, two endings - which is
   // the one thing every prompt in this game is built to teach.
-  const feminine = promptText(SPANISH, { role: "baker", accessory: "shirt", colour: "red" });
-  const masculine = promptText(SPANISH, { role: "baker", accessory: "umbrella", colour: "red" });
+  const feminine = promptText(SPANISH, { subject: "baker", trait: "shirt", colour: "red" });
+  const masculine = promptText(SPANISH, { subject: "baker", trait: "umbrella", colour: "red" });
   assert.match(feminine, /la camisa roja$/);
   assert.match(masculine, /el paraguas rojo$/);
   assert.match(feminine, /^Encuentra al panadero con /);
 });
 
 test("an invariant colour keeps one form in both genders", () => {
-  assert.match(promptText(SPANISH, { role: "nurse", accessory: "shirt", colour: "blue" }), /la camisa azul$/);
-  assert.match(promptText(SPANISH, { role: "nurse", accessory: "umbrella", colour: "blue" }), /el paraguas azul$/);
+  assert.match(promptText(SPANISH, { subject: "nurse", trait: "shirt", colour: "blue" }), /la camisa azul$/);
+  assert.match(promptText(SPANISH, { subject: "nurse", trait: "umbrella", colour: "blue" }), /el paraguas azul$/);
 });
 
 test("a missing word names the ids rather than printing a hole", () => {
-  const text = promptText(SPANISH, { role: "astronaut", accessory: "umbrella", colour: "red" });
+  const text = promptText(SPANISH, { subject: "astronaut", trait: "umbrella", colour: "red" });
   assert.match(text, /\[no words for astronaut\//);
 });
 
 test("the gloss reads as English in the prompt's order", () => {
-  assert.equal(glossText(SPANISH, { role: "baker", accessory: "umbrella", colour: "red" }), "the baker with the red umbrella");
+  assert.equal(glossText(SPANISH, { subject: "baker", trait: "umbrella", colour: "red" }), "the baker with the red umbrella");
 });
 
 test("angleDelta takes the short way round the seam", () => {
@@ -256,7 +257,7 @@ test("claiming the target is correct and scores once", () => {
   const snapshot = hunt.snapshot();
   assert.equal(snapshot.found, 1);
   assert.equal(snapshot.attempts, 1);
-  assert.deepEqual(snapshot.misses, { role: 0, accessory: 0, colour: 0 });
+  assert.deepEqual(snapshot.misses, { subject: 0, trait: 0, colour: 0 });
 });
 
 test("a one-clause-off claim reports exactly which clause was lost", () => {
@@ -275,7 +276,7 @@ test("a one-clause-off claim reports exactly which clause was lost", () => {
     const verdict = hunt.claim();
     assert.equal(verdict.kind, "wrong");
     assert.deepEqual(verdict.kind === "wrong" ? verdict.missed : [], [clause]);
-    const counted: Record<Clause, number> = { role: 0, accessory: 0, colour: 0 };
+    const counted: Record<Clause, number> = { subject: 0, trait: 0, colour: 0 };
     counted[clause] = 1;
     assert.deepEqual(hunt.snapshot().misses, counted);
   }
@@ -354,9 +355,79 @@ test("the scene is reproducible from its seed and different between seeds", () =
   const b = buildScene(sceneConfig(), seededRandom(99));
   const c = buildScene(sceneConfig(), seededRandom(100));
   assert.deepEqual(combinationOf(a.target), combinationOf(b.target));
-  assert.deepEqual(a.characters.map((x) => x.id + x.role), b.characters.map((x) => x.id + x.role));
+  assert.deepEqual(a.characters.map((x) => x.id + x.subject), b.characters.map((x) => x.id + x.subject));
   assert.notDeepEqual(
-    a.characters.map((x) => x.role + x.accessory + x.colour),
-    c.characters.map((x) => x.role + x.accessory + x.colour),
+    a.characters.map((x) => x.subject + x.trait + x.colour),
+    c.characters.map((x) => x.subject + x.trait + x.colour),
   );
+});
+
+test("every language has a word for everything the topic can name", () => {
+  // A missing word shows up as a bracketed id, which in a demo looks like a crash. Cheaper to
+  // assert the whole cross product - 240 sentences per language - than to find one on stage.
+  for (const lexicon of LANGUAGES) {
+    for (const subject of JOBS.subjects) {
+      for (const trait of JOBS.traits) {
+        for (const colour of JOBS.colours) {
+          const text = promptText(lexicon, { subject, trait, colour });
+          assert.doesNotMatch(text, /\[no words for/, `${lexicon.name}: ${subject}/${trait}/${colour}`);
+          assert.ok(text.length > 4, `${lexicon.name}: suspiciously short sentence "${text}"`);
+          assert.doesNotMatch(text, /\s{2}/, `${lexicon.name}: double space in "${text}" - an empty article was not collapsed`);
+          assert.doesNotMatch(text, /\{\w+\}/, `${lexicon.name}: unfilled placeholder in "${text}"`);
+        }
+      }
+      assert.ok(doesText(lexicon, subject).length > 0, `${lexicon.name}: nothing said about ${subject}`);
+    }
+    assert.ok(lexicon.praise.length > 0 && lexicon.again.length > 0, `${lexicon.name}: no praise or replay line`);
+  }
+});
+
+test("an invariant adjective is used for every gender", () => {
+  assert.equal(agree({ "*": "rouge" }, "m"), "rouge");
+  assert.equal(agree({ "*": "rouge" }, "f"), "rouge");
+  assert.equal(agree({ m: "bleu", f: "bleue" }, "f"), "bleue");
+  // An unknown gender falls back rather than producing an empty word in the middle of a sentence.
+  assert.equal(agree({ m: "bleu", f: "bleue" }, "n"), "bleu");
+});
+
+test("word order follows the language, not the first one that was written", () => {
+  const spanish = promptText(SPANISH, { subject: "butcher", trait: "shirt", colour: "red" });
+  const hindi = promptText(HINDI, { subject: "butcher", trait: "shirt", colour: "red" });
+  // Spanish: colour last. Hindi: colour first, verb last. Same ids, different sentences.
+  assert.ok(spanish.indexOf("roja") > spanish.indexOf("camisa"), spanish);
+  const hindiColour = HINDI.colours.red?.["*"] ?? "";
+  const hindiSubject = HINDI.subjects.butcher?.word ?? "";
+  assert.ok(hindi.indexOf(hindiColour) < hindi.indexOf(hindiSubject), hindi);
+  assert.ok(hindi.endsWith(HINDI.find), hindi);
+});
+
+test("the hunt is timed from the frame deltas, not from a clock", () => {
+  const hunt = new Hunt(buildScene(), aimConfig({ followSeconds: 0 }));
+  assert.equal(hunt.snapshot().elapsedMs, 0);
+  for (let n = 0; n < 60; n += 1) hunt.tick(16);
+  assert.equal(hunt.snapshot().elapsedMs, 960);
+  // A negative or absurd delta from a stalled frame clock must not run the timer backwards.
+  hunt.tick(-500);
+  assert.equal(hunt.snapshot().elapsedMs, 960);
+});
+
+test("the timer stops when the target is found and not before", () => {
+  const scene = buildScene();
+  const hunt = new Hunt(scene, aimConfig({ followSeconds: 0 }));
+  hunt.tick(500);
+  // A wrong claim keeps the clock running: being wrong costs time, which is the whole point.
+  const decoy = scene.characters.find((ch) => missedClauses(scene.target, ch).length === 1);
+  hunt.nudge((decoy.x - hunt.snapshot().lens.x) / scene.width, (decoy.y - hunt.snapshot().lens.y) / scene.height);
+  hunt.tick(500);
+  hunt.claim();
+  hunt.tick(500);
+  assert.equal(hunt.snapshot().finished, false);
+  assert.equal(hunt.snapshot().elapsedMs, 1500);
+
+  hunt.nudge((scene.target.x - hunt.snapshot().lens.x) / scene.width, (scene.target.y - hunt.snapshot().lens.y) / scene.height);
+  hunt.tick(100);
+  assert.equal(hunt.claim().kind, "correct");
+  hunt.tick(10000);
+  assert.equal(hunt.snapshot().finished, true);
+  assert.equal(hunt.snapshot().elapsedMs, 1600, "time kept running after the hunt was over");
 });
