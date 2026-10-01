@@ -100,24 +100,24 @@ test("the adjective agrees with the accessory, not the person", () => {
   // camisa is feminine, sombrero masculine. The same colour, the same role, two endings - which is
   // the one thing every prompt in this game is built to teach.
   const feminine = promptText(SPANISH, { role: "baker", accessory: "shirt", colour: "red" });
-  const masculine = promptText(SPANISH, { role: "baker", accessory: "hat", colour: "red" });
+  const masculine = promptText(SPANISH, { role: "baker", accessory: "umbrella", colour: "red" });
   assert.match(feminine, /la camisa roja$/);
-  assert.match(masculine, /el sombrero rojo$/);
+  assert.match(masculine, /el paraguas rojo$/);
   assert.match(feminine, /^Encuentra al panadero con /);
 });
 
 test("an invariant colour keeps one form in both genders", () => {
   assert.match(promptText(SPANISH, { role: "nurse", accessory: "shirt", colour: "blue" }), /la camisa azul$/);
-  assert.match(promptText(SPANISH, { role: "nurse", accessory: "hat", colour: "blue" }), /el sombrero azul$/);
+  assert.match(promptText(SPANISH, { role: "nurse", accessory: "umbrella", colour: "blue" }), /el paraguas azul$/);
 });
 
 test("a missing word names the ids rather than printing a hole", () => {
-  const text = promptText(SPANISH, { role: "astronaut", accessory: "hat", colour: "red" });
+  const text = promptText(SPANISH, { role: "astronaut", accessory: "umbrella", colour: "red" });
   assert.match(text, /\[no words for astronaut\//);
 });
 
 test("the gloss reads as English in the prompt's order", () => {
-  assert.equal(glossText(SPANISH, { role: "baker", accessory: "hat", colour: "red" }), "the baker with the red hat");
+  assert.equal(glossText(SPANISH, { role: "baker", accessory: "umbrella", colour: "red" }), "the baker with the red umbrella");
 });
 
 test("angleDelta takes the short way round the seam", () => {

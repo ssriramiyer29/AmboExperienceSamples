@@ -142,6 +142,15 @@ export interface SceneConfig {
   /** How far from its cell centre a character may stray, as a fraction of the cell. */
   readonly jitter: number;
   readonly roles: readonly string[];
+  /**
+   * Body items only, and never headwear.
+   *
+   * The role is read from a silhouette - a toque, a straw hat, a sailor cap, and the tool in the
+   * hands - because eight professions have to be told apart across a room at a glance. That makes
+   * headwear the role's, so "the baker with the red hat" would name two things at once and the
+   * prompt would contradict the picture. The accessory is what takes the colour; the role's
+   * headwear and tool stay in ink.
+   */
   readonly accessories: readonly string[];
   readonly colours: readonly string[];
   /**
@@ -160,7 +169,7 @@ export function sceneConfig(overrides: Partial<SceneConfig> = {}): SceneConfig {
     margin: 300,
     jitter: 0.3,
     roles: ["baker", "butcher", "farmer", "fisher", "nurse", "painter", "sailor", "teacher"],
-    accessories: ["hat", "shirt", "scarf", "apron", "bag"],
+    accessories: ["shirt", "scarf", "apron", "bag", "umbrella"],
     colours: ["red", "blue", "green", "yellow", "white", "black"],
     decoysPerClause: 3,
     ...overrides,
@@ -588,11 +597,11 @@ export const SPANISH: Lexicon = {
     teacher: { article: "al", word: "maestro", gender: "m" },
   },
   accessories: {
-    hat: { article: "el", word: "sombrero", gender: "m" },
     shirt: { article: "la", word: "camisa", gender: "f" },
     scarf: { article: "la", word: "bufanda", gender: "f" },
     apron: { article: "el", word: "delantal", gender: "m" },
     bag: { article: "la", word: "bolsa", gender: "f" },
+    umbrella: { article: "el", word: "paraguas", gender: "m" },
   },
   colours: {
     red: { m: "rojo", f: "roja" },
@@ -605,7 +614,7 @@ export const SPANISH: Lexicon = {
   gloss: {
     baker: "baker", butcher: "butcher", farmer: "farmer", fisher: "fisherman",
     nurse: "nurse", painter: "painter", sailor: "sailor", teacher: "teacher",
-    hat: "hat", shirt: "shirt", scarf: "scarf", apron: "apron", bag: "bag",
+    shirt: "shirt", scarf: "scarf", apron: "apron", bag: "bag", umbrella: "umbrella",
     red: "red", blue: "blue", green: "green", yellow: "yellow", white: "white", black: "black",
   },
 };
