@@ -48,10 +48,11 @@ function resolveGateway(): string {
  * surface that has to stay free for the claiming tap.
  */
 const CONTROLS = [
-  { id: "recentre", label: "Centre", x: 0.93, y: 0.14 },
-  { id: "say", label: "Say", x: 0.93, y: 0.38 },
-  { id: "hint", label: "Hint", x: 0.93, y: 0.62 },
-  { id: "next", label: "New", x: 0.93, y: 0.86 },
+  { id: "recentre", label: "Centre", x: 0.93, y: 0.11 },
+  { id: "say", label: "Say", x: 0.93, y: 0.31 },
+  { id: "hint", label: "Hint", x: 0.93, y: 0.51 },
+  { id: "lang", label: "Lang", x: 0.93, y: 0.71 },
+  { id: "next", label: "New", x: 0.93, y: 0.91 },
 ] as const;
 
 const PALETTE_LAYOUT: AepControllerLayout = {
@@ -221,17 +222,39 @@ session.capabilities.event.subscribe((event: AepCapabilityEvent) => {
   if (gesture.type === "tap") {
     claim();
   } else if (gesture.type === "drag") {
-    // The fallback driver, kept because orientation is the one thing here that cannot be tested
-    // without a phone in a hand. Inverted, because a drag moves the scene rather than the lens.
-    hunt.nudge(-(gesture.dx ?? 0) * 0.9, -(gesture.dy ?? 0) * 0.9);
+    // NOT inverted. AmboTouchDraw's drag moves the paper under a fixed view, so its deltas are
+    // subtracted; here the finger moves the LENS, so dragging right looks right. Copying the
+    // subtraction across was the single most-reported thing about the first build.
+    hunt.nudge((gesture.dx ?? 0) * 0.9, (gesture.dy ?? 0) * 0.9);
   }
 });
 
 function press(controlId: string): void {
   if (controlId === "recentre") { hunt.recentre(); say("Centred."); }
   else if (controlId === "say") speak(promptText(target, scene.target));
-  else if (controlId === "hint") ui.gloss.textContent = promptText(helper, scene.target);
+  else if (controlId === "hint") {
+    const hint = promptText(helper, scene.target);
+    ui.gloss.textContent = hint;
+    // In the KNOWN language, not the one being learned - a hint read aloud in the language you
+    // cannot yet parse is not a hint.
+    speakIn(helper, hint);
+  } else if (controlId === "lang") cycleLanguage();
   else if (controlId === "next") newRound();
+}
+
+/**
+ * Cycles the language being learned, under the same crowd and the same target.
+ *
+ * The picture does not move and only the words do, which is the clearest demonstration there is of
+ * what a lexicon is - and it is the thing the sample exists to show.
+ */
+function cycleLanguage(): void {
+  const at = LANGUAGES.indexOf(target);
+  target = LANGUAGES[(at + 1) % LANGUAGES.length] ?? target;
+  if (target === helper) target = LANGUAGES[(LANGUAGES.indexOf(target) + 1) % LANGUAGES.length] ?? target;
+  showPrompt();
+  speak(promptText(target, scene.target));
+  say(target.name);
 }
 
 function newRound(): void {
@@ -293,13 +316,15 @@ function chip(kind: "subject" | "trait", id: string, paint: string, word: string
  * browser with no matching voice stays silent instead of erroring - so the game would appear to
  * work while losing half of what it teaches.
  */
-function speak(text: string): void {
+function speak(text: string): void { speakIn(target, text); }
+
+function speakIn(lexicon: Lexicon, text: string): void {
   if (text === "") return;
   try {
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = target.code;
+    utterance.lang = lexicon.code;
     utterance.rate = 0.85;
-    const base = target.code.toLowerCase().split("-")[0] ?? "";
+    const base = lexicon.code.toLowerCase().split("-")[0] ?? "";
     const voice = speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().replace("_", "-").startsWith(base));
     if (voice !== undefined) utterance.voice = voice;
     speechSynthesis.cancel();

@@ -473,9 +473,13 @@ export interface AimConfig {
   /** Lens radius in scene units. Shrinking this is the difficulty dial that costs nothing. */
   readonly lensRadius: number;
   /**
-   * How much turning covers the whole scene. 70 degrees of yaw across the width is a wrist
-   * movement from a sofa, not a shoulder movement - which matters because a round is 30 seconds
-   * and an arm held up at a television stops being fun well before that.
+   * How much turning covers the whole scene. Larger is LESS sensitive: the same wrist movement
+   * covers a smaller fraction of the scene.
+   *
+   * 70 and 50 were chosen by looking at a desktop prototype and reported as "extremely sensitive"
+   * the first time anybody held a phone. 115 and 85 are the first numbers from hardware rather
+   * than from a screen, and they are still a wrist movement rather than a shoulder one - which
+   * matters, because an arm held up at a television stops being fun well before a round ends.
    */
   readonly yawSpanDeg: number;
   readonly pitchSpanDeg: number;
@@ -511,8 +515,8 @@ export interface AimConfig {
 export function aimConfig(overrides: Partial<AimConfig> = {}): AimConfig {
   return {
     lensRadius: 280,
-    yawSpanDeg: 70,
-    pitchSpanDeg: 50,
+    yawSpanDeg: 115,
+    pitchSpanDeg: 85,
     invertYaw: false,
     invertPitch: true,
     pitchLimitDeg: 55,

@@ -205,6 +205,16 @@ export class SpyglassRenderer {
   readonly #pen: Pen;
   /** How much bigger the lens draws the scene. Four is enough to read a tool at arm's length. */
   readonly #magnify = 4.2;
+  /**
+   * Bands the scene is kept out of, because the prompt and the legend are drawn over the canvas.
+   *
+   * Reported from a playtest: the lens could be swept behind the prompt bar, where neither it nor
+   * the character under it could be seen - so part of the scene was unplayable and looked like the
+   * lens had simply vanished. Overlaying a HUD on a surface the player has to search is the bug;
+   * letterboxing the scene out from under it is the fix.
+   */
+  readonly #topBand = 96;
+  readonly #bottomBand = 64;
 
   constructor(canvas: HTMLCanvasElement) {
     this.#canvas = canvas;
@@ -231,9 +241,10 @@ export class SpyglassRenderer {
 
     // Placeholder scenery. A painted background goes here - see art/CONTRACT.md Part One - and is
     // deliberately plain so nobody mistakes it for the commissioned piece.
-    const fit = Math.min(width / scene.width, height / scene.height);
+    const playable = Math.max(1, height - this.#topBand - this.#bottomBand);
+    const fit = Math.min(width / scene.width, playable / scene.height);
     const offsetX = (width - scene.width * fit) / 2;
-    const offsetY = (height - scene.height * fit) / 2;
+    const offsetY = this.#topBand + (playable - scene.height * fit) / 2;
 
     c.save();
     c.translate(offsetX, offsetY);
@@ -292,33 +303,37 @@ export class SpyglassRenderer {
     c.moveTo(lensX, lensY - 12); c.lineTo(lensX, lensY + 12);
     c.stroke();
 
-    this.#legend(c, lexicon);
+    this.#legend(c, lexicon, width, height);
   }
 
-  /** Which hat is which word. Reading it is the vocabulary work, so it is not a cheat. */
-  #legend(c: Pen, lexicon: Lexicon): void {
+  /**
+   * Which hat is which word, along the bottom band. Reading it is the vocabulary work, so it is
+   * not a cheat - but it must not sit on top of the crowd it describes.
+   */
+  #legend(c: Pen, lexicon: Lexicon, width: number, height: number): void {
     const roles = Object.keys(lexicon.subjects);
-    const rowHeight = 30;
-    const top = 12;
+    const top = height - this.#bottomBand + 4;
+    const slot = Math.min(170, (width - 24) / roles.length);
     c.fillStyle = "rgba(255,250,240,.95)";
     c.strokeStyle = "#ffffff";
     c.lineWidth = 3;
     c.beginPath();
-    c.roundRect(8, top, 150, roles.length * rowHeight + 16, 12);
+    c.roundRect(12, top, width - 24, this.#bottomBand - 12, 12);
     c.fill();
     c.stroke();
-    c.font = "600 14px ui-monospace, 'JetBrains Mono', monospace";
+    c.font = "600 13px ui-monospace, 'JetBrains Mono', monospace";
     c.textBaseline = "middle";
+    const centre = top + (this.#bottomBand - 12) / 2;
     roles.forEach((role, index) => {
-      const centre = top + 8 + index * rowHeight + rowHeight / 2;
+      const x = 20 + index * slot;
       c.save();
-      c.translate(32, centre);
-      c.scale(0.26, 0.26);
+      c.translate(x + 14, centre);
+      c.scale(0.22, 0.22);
       c.translate(0, 80);
       (HEADWEAR[role] ?? nothing)(c);
       c.restore();
       c.fillStyle = "#17405c";
-      c.fillText(lexicon.subjects[role]?.word ?? role, 56, centre);
+      c.fillText(lexicon.subjects[role]?.word ?? role, x + 32, centre);
     });
     c.textBaseline = "alphabetic";
   }
