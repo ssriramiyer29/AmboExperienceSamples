@@ -69,7 +69,21 @@ export interface Scene {
  */
 export interface Noun {
   readonly article: string;
+  /** The citation form - what goes on the label beside the picture. */
   readonly word: string;
+  /**
+   * The form the sentence needs, when the language inflects it. Falls back to `word`.
+   *
+   * Required by any language that marks case on the noun itself rather than with a separate
+   * particle: Kannada's accusative is a suffix, and Hindi's oblique changes the vowel. Keeping the
+   * citation form separate matters because the picture is labelled with the word a learner should
+   * remember, not with the case-marked form that happens to appear in this one sentence.
+   */
+  readonly inflected?: string;
+  /**
+   * The key an adjective agrees with. Not only a gender: Hindi needs a different adjective form in
+   * the oblique, so its masculine oblique nouns declare "m.obl" and its colours answer to it.
+   */
   readonly gender: string;
 }
 
@@ -101,8 +115,15 @@ export interface Lexicon {
    */
   readonly pattern: string;
   readonly find: string;
-  /** The word joining a person to what they are wearing or carrying. May be empty. */
-  readonly with: string;
+  /**
+   * The word joining a person to what they are wearing or carrying, agreeing with the SUBJECT.
+   *
+   * An Adjective rather than a string because Hindi inflects it - vaale for a man, vaali for a
+   * woman - and a plain string would have silently produced one wrong sentence in eight. Languages
+   * that do not inflect it declare an invariant form, and languages that have no such word at all
+   * declare it empty.
+   */
+  readonly with: Adjective;
   readonly subjects: Readonly<Record<string, Noun>>;
   readonly traits: Readonly<Record<string, Noun>>;
   readonly colours: Readonly<Record<string, Adjective>>;
@@ -115,8 +136,6 @@ export interface Lexicon {
   readonly does: Readonly<Record<string, string>>;
   readonly praise: string;
   readonly again: string;
-  /** English, for the gloss a beginner is allowed to reveal. Keyed by the same ids. */
-  readonly gloss: Readonly<Record<string, string>>;
 }
 
 /** The adjective form agreeing with `gender`, falling back to an invariant form. */
@@ -145,10 +164,10 @@ export function promptText(lexicon: Lexicon, combination: Combination): string {
   const filled: Record<string, string> = {
     find: lexicon.find,
     subjectArticle: subject.article,
-    subject: subject.word,
-    with: lexicon.with,
+    subject: subject.inflected ?? subject.word,
+    with: agree(lexicon.with, subject.gender),
     traitArticle: trait.article,
-    trait: trait.word,
+    trait: trait.inflected ?? trait.word,
     colour: agree(colour, trait.gender),
   };
   return lexicon.pattern
@@ -161,13 +180,6 @@ export function promptText(lexicon: Lexicon, combination: Combination): string {
 /** What the found profession does, in the target language. Empty when the language has not said. */
 export function doesText(lexicon: Lexicon, subjectId: string): string {
   return lexicon.does[subjectId] ?? "";
-}
-
-/** The English the hint button reveals, assembled from the same ids. */
-export function glossText(lexicon: Lexicon, combination: Combination): string {
-  const parts = [combination.subject, combination.trait, combination.colour]
-    .map((id) => lexicon.gloss[id] ?? id);
-  return `the ${parts[0]} with the ${parts[2]} ${parts[1]}`;
 }
 
 /* ------------------------------------------------------------------ generating a scene */
@@ -654,8 +666,9 @@ export class Hunt {
  * would be girl x running x red.
  *
  * What a topic does NOT carry is the drawing. A renderer needs one picture per subject and one per
- * trait - thirteen drawings for this topic, not the hundreds the crowd appears to contain, which
- * is the whole economy of generating the crowd from a grid.
+ * trait - thirteen pictures for this topic, not the hundreds the crowd appears to contain, which
+ * is the whole economy of generating the crowd from a grid, and what makes commissioning artwork
+ * good enough for a child affordable.
  */
 export interface Topic {
   readonly id: string;
@@ -671,18 +684,147 @@ export const JOBS: Topic = {
   colours: ["red", "blue", "green", "yellow", "white", "black"],
 };
 
-/** English, shared by every lexicon: it is the gloss, not one of the languages on offer. */
-const GLOSS: Readonly<Record<string, string>> = {
-  baker: "baker", butcher: "butcher", farmer: "farmer", fisher: "fisherman",
-  nurse: "nurse", painter: "painter", sailor: "sailor", teacher: "teacher",
-  shirt: "shirt", scarf: "scarf", apron: "apron", bag: "bag", umbrella: "umbrella",
-  red: "red", blue: "blue", green: "green", yellow: "yellow", white: "white", black: "black",
+const INVARIANT = (word: string): Adjective => ({ "*": word });
+
+/**
+ * English, which is a target language here and not a privileged one.
+ *
+ * The hint is the same sentence in whichever language the learner already knows, so there is no
+ * separate gloss table any more - a learner who knows Kannada and is learning Hindi is served by
+ * the same mechanism as one who knows English. That is also why the colour sits before the noun
+ * here and after it in Spanish: word order is carried by the pattern, not by the code.
+ */
+export const ENGLISH: Lexicon = {
+  code: "en-GB", name: "English",
+  pattern: "{find} {subjectArticle} {subject} {with} {traitArticle} {colour} {trait}",
+  find: "Find", with: INVARIANT("with"),
+  subjects: {
+    baker: { article: "the", word: "baker", gender: "m" },
+    butcher: { article: "the", word: "butcher", gender: "m" },
+    farmer: { article: "the", word: "farmer", gender: "m" },
+    fisher: { article: "the", word: "fisherman", gender: "m" },
+    nurse: { article: "the", word: "nurse", gender: "f" },
+    painter: { article: "the", word: "painter", gender: "m" },
+    sailor: { article: "the", word: "sailor", gender: "m" },
+    teacher: { article: "the", word: "teacher", gender: "m" },
+  },
+  traits: {
+    shirt: { article: "the", word: "shirt", gender: "n" },
+    scarf: { article: "the", word: "scarf", gender: "n" },
+    apron: { article: "the", word: "apron", gender: "n" },
+    bag: { article: "the", word: "bag", gender: "n" },
+    umbrella: { article: "the", word: "umbrella", gender: "n" },
+  },
+  colours: {
+    red: INVARIANT("red"), blue: INVARIANT("blue"), green: INVARIANT("green"),
+    yellow: INVARIANT("yellow"), white: INVARIANT("white"), black: INVARIANT("black"),
+  },
+  does: {
+    baker: "A baker bakes bread.", butcher: "A butcher cuts meat.",
+    farmer: "A farmer grows food.", fisher: "A fisherman catches fish.",
+    nurse: "A nurse looks after people who are ill.", painter: "A painter paints pictures.",
+    sailor: "A sailor sails a ship.", teacher: "A teacher teaches children.",
+  },
+  praise: "Well done!", again: "Again?",
+};
+
+/**
+ * Hindi. The reason the pattern had to become data: the colour comes before the noun, the
+ * postposition follows it, and the verb is last.
+ *
+ * Also the reason `inflected` and an agreeing `with` exist. An earlier version read
+ * "kaala chhaata vaale", which is wrong twice over - the oblique needs "kaale chhaate", and
+ * "vaale" becomes "vaali" for a woman. The masculine oblique nouns declare gender "m.obl" and the
+ * colours answer to that key, so the agreement is data like everything else.
+ *
+ * NOT yet checked by a native speaker. The case marking is where this is least certain.
+ */
+export const HINDI: Lexicon = {
+  code: "hi-IN", name: "हिन्दी",
+  pattern: "{colour} {trait} {with} {subject} को {find}",
+  find: "ढूंढो", with: { m: "वाले", f: "वाली", "m.obl": "वाले" },
+  subjects: {
+    baker: { article: "", word: "नानबाई", gender: "m" },
+    butcher: { article: "", word: "कसाई", gender: "m" },
+    farmer: { article: "", word: "किसान", gender: "m" },
+    fisher: { article: "", word: "मछुआरा", inflected: "मछुआरे", gender: "m" },
+    nurse: { article: "", word: "नर्स", gender: "f" },
+    painter: { article: "", word: "चित्रकार", gender: "m" },
+    sailor: { article: "", word: "नाविक", gender: "m" },
+    teacher: { article: "", word: "शिक्षक", gender: "m" },
+  },
+  traits: {
+    shirt: { article: "", word: "कमीज़", gender: "f" },
+    scarf: { article: "", word: "स्कार्फ़", gender: "m.obl" },
+    apron: { article: "", word: "एप्रन", gender: "m.obl" },
+    bag: { article: "", word: "बैग", gender: "m.obl" },
+    umbrella: { article: "", word: "छाता", inflected: "छाते", gender: "m.obl" },
+  },
+  colours: {
+    red: INVARIANT("लाल"),
+    blue: { m: "नीला", f: "नीली", "m.obl": "नीले" },
+    green: { m: "हरा", f: "हरी", "m.obl": "हरे" },
+    yellow: { m: "पीला", f: "पीली", "m.obl": "पीले" },
+    white: INVARIANT("सफ़ेद"),
+    black: { m: "काला", f: "काली", "m.obl": "काले" },
+  },
+  does: {
+    baker: "नानबाई रोटी बनाता है।", butcher: "कसाई मांस काटता है।",
+    farmer: "किसान खेती करता है।", fisher: "मछुआरा मछली पकड़ता है।",
+    nurse: "नर्स मरीज़ों की देखभाल करती है।", painter: "चित्रकार तस्वीरें बनाता है।",
+    sailor: "नाविक जहाज़ चलाता है।", teacher: "शिक्षक बच्चों को पढ़ाता है।",
+  },
+  praise: "शाबाश!", again: "फिर से?",
+};
+
+/**
+ * Kannada, and the reason `inflected` is on the noun rather than in the pattern: the accusative is
+ * a suffix glued to the word, so no amount of rearranging a template produces it.
+ *
+ * Kannada adjectives do not agree at all, which makes it the useful contrast in this set - three
+ * languages that inflect the colour and one that never does, so a learner moving between them
+ * meets the idea of agreement as something languages choose rather than something sentences have.
+ *
+ * NOT yet checked by a native speaker, and less certain than the Hindi.
+ */
+export const KANNADA: Lexicon = {
+  code: "kn-IN", name: "ಕನ್ನಡ",
+  pattern: "{colour} {trait} {with} {subject} {find}",
+  find: "ಹುಡುಕು", with: INVARIANT("ಇರುವ"),
+  subjects: {
+    baker: { article: "", word: "ಬೇಕರ್", inflected: "ಬೇಕರನ್ನು", gender: "m" },
+    butcher: { article: "", word: "ಕಟುಕ", inflected: "ಕಟುಕನನ್ನು", gender: "m" },
+    farmer: { article: "", word: "ರೈತ", inflected: "ರೈತನನ್ನು", gender: "m" },
+    fisher: { article: "", word: "ಮೀನುಗಾರ", inflected: "ಮೀನುಗಾರನನ್ನು", gender: "m" },
+    nurse: { article: "", word: "ದಾದಿ", inflected: "ದಾದಿಯನ್ನು", gender: "f" },
+    painter: { article: "", word: "ಚಿತ್ರಕಾರ", inflected: "ಚಿತ್ರಕಾರನನ್ನು", gender: "m" },
+    sailor: { article: "", word: "ನಾವಿಕ", inflected: "ನಾವಿಕನನ್ನು", gender: "m" },
+    teacher: { article: "", word: "ಶಿಕ್ಷಕ", inflected: "ಶಿಕ್ಷಕನನ್ನು", gender: "m" },
+  },
+  traits: {
+    shirt: { article: "", word: "ಅಂಗಿ", gender: "n" },
+    scarf: { article: "", word: "ಶಲ್ಯ", gender: "n" },
+    apron: { article: "", word: "ಏಪ್ರನ್", gender: "n" },
+    bag: { article: "", word: "ಚೀಲ", gender: "n" },
+    umbrella: { article: "", word: "ಕೊಡೆ", gender: "n" },
+  },
+  colours: {
+    red: INVARIANT("ಕೆಂಪು"), blue: INVARIANT("ನೀಲಿ"), green: INVARIANT("ಹಸಿರು"),
+    yellow: INVARIANT("ಹಳದಿ"), white: INVARIANT("ಬಿಳಿ"), black: INVARIANT("ಕಪ್ಪು"),
+  },
+  does: {
+    baker: "ಬೇಕರ್ ರೊಟ್ಟಿ ಮಾಡುತ್ತಾನೆ.", butcher: "ಕಟುಕ ಮಾಂಸ ಕತ್ತರಿಸುತ್ತಾನೆ.",
+    farmer: "ರೈತ ಬೆಳೆ ಬೆಳೆಯುತ್ತಾನೆ.", fisher: "ಮೀನುಗಾರ ಮೀನು ಹಿಡಿಯುತ್ತಾನೆ.",
+    nurse: "ದಾದಿ ರೋಗಿಗಳನ್ನು ನೋಡಿಕೊಳ್ಳುತ್ತಾಳೆ.", painter: "ಚಿತ್ರಕಾರ ಚಿತ್ರ ಬಿಡಿಸುತ್ತಾನೆ.",
+    sailor: "ನಾವಿಕ ಹಡಗು ಓಡಿಸುತ್ತಾನೆ.", teacher: "ಶಿಕ್ಷಕ ಮಕ್ಕಳಿಗೆ ಕಲಿಸುತ್ತಾನೆ.",
+  },
+  praise: "ಭೇಷ್!", again: "ಇನ್ನೊಮ್ಮೆ?",
 };
 
 const ROMANCE = "{find} {subjectArticle} {subject} {with} {traitArticle} {trait} {colour}";
 
 export const SPANISH: Lexicon = {
-  code: "es-ES", name: "Espanol", pattern: ROMANCE, find: "Encuentra", with: "con",
+  code: "es-ES", name: "Espanol", pattern: ROMANCE, find: "Encuentra", with: INVARIANT("con"),
   subjects: {
     baker: { article: "al", word: "panadero", gender: "m" },
     butcher: { article: "al", word: "carnicero", gender: "m" },
@@ -701,7 +843,7 @@ export const SPANISH: Lexicon = {
     umbrella: { article: "el", word: "paraguas", gender: "m" },
   },
   colours: {
-    red: { m: "rojo", f: "roja" }, blue: { "*": "azul" }, green: { "*": "verde" },
+    red: { m: "rojo", f: "roja" }, blue: INVARIANT("azul"), green: INVARIANT("verde"),
     yellow: { m: "amarillo", f: "amarilla" }, white: { m: "blanco", f: "blanca" },
     black: { m: "negro", f: "negra" },
   },
@@ -711,11 +853,11 @@ export const SPANISH: Lexicon = {
     nurse: "La enfermera cuida a los enfermos.", painter: "El pintor pinta cuadros.",
     sailor: "El marinero navega en un barco.", teacher: "El maestro ensena a los ninos.",
   },
-  praise: "Muy bien!", again: "Otra vez?", gloss: GLOSS,
+  praise: "Muy bien!", again: "Otra vez?",
 };
 
 export const FRENCH: Lexicon = {
-  code: "fr-FR", name: "Francais", pattern: ROMANCE, find: "Trouve", with: "avec",
+  code: "fr-FR", name: "Francais", pattern: ROMANCE, find: "Trouve", with: INVARIANT("avec"),
   subjects: {
     baker: { article: "le", word: "boulanger", gender: "m" },
     butcher: { article: "le", word: "boucher", gender: "m" },
@@ -736,8 +878,8 @@ export const FRENCH: Lexicon = {
     umbrella: { article: "le", word: "parapluie", gender: "m" },
   },
   colours: {
-    red: { "*": "rouge" }, blue: { m: "bleu", f: "bleue" }, green: { m: "vert", f: "verte" },
-    yellow: { "*": "jaune" }, white: { m: "blanc", f: "blanche" }, black: { m: "noir", f: "noire" },
+    red: INVARIANT("rouge"), blue: { m: "bleu", f: "bleue" }, green: { m: "vert", f: "verte" },
+    yellow: INVARIANT("jaune"), white: { m: "blanc", f: "blanche" }, black: { m: "noir", f: "noire" },
   },
   does: {
     baker: "Le boulanger fait du pain.", butcher: "Le boucher coupe la viande.",
@@ -745,57 +887,8 @@ export const FRENCH: Lexicon = {
     nurse: "L'infirmiere soigne les malades.", painter: "Le peintre peint des tableaux.",
     sailor: "Le marin navigue sur un bateau.", teacher: "Le maitre enseigne aux enfants.",
   },
-  praise: "Tres bien!", again: "Encore?", gloss: GLOSS,
+  praise: "Tres bien!", again: "Encore?",
 };
 
-/**
- * Hindi, and the reason the pattern had to become data: the colour comes before the noun, the
- * postposition follows it, and the verb is last. No article at all, which the template handles by
- * collapsing the empty one.
- *
- * NOT yet checked by a native speaker - the grammar here is the structure being proven, and the
- * wording should be read by someone who speaks it before this goes in front of anybody.
- */
-export const HINDI: Lexicon = {
-  code: "hi-IN", name: "\u0939\u093f\u0928\u094d\u0926\u0940",
-  pattern: "{colour} {trait} {with} {subject} \u0915\u094b {find}",
-  find: "\u0922\u0942\u0902\u0922\u094b", with: "\u0935\u093e\u0932\u0947",
-  subjects: {
-    baker: { article: "", word: "\u0928\u093e\u0928\u092c\u093e\u0908", gender: "m" },
-    butcher: { article: "", word: "\u0915\u0938\u093e\u0908", gender: "m" },
-    farmer: { article: "", word: "\u0915\u093f\u0938\u093e\u0928", gender: "m" },
-    fisher: { article: "", word: "\u092e\u091b\u0941\u0906\u0930\u093e", gender: "m" },
-    nurse: { article: "", word: "\u0928\u0930\u094d\u0938", gender: "f" },
-    painter: { article: "", word: "\u091a\u093f\u0924\u094d\u0930\u0915\u093e\u0930", gender: "m" },
-    sailor: { article: "", word: "\u0928\u093e\u0935\u093f\u0915", gender: "m" },
-    teacher: { article: "", word: "\u0936\u093f\u0915\u094d\u0937\u0915", gender: "m" },
-  },
-  traits: {
-    shirt: { article: "", word: "\u0915\u092e\u0940\u095b", gender: "f" },
-    scarf: { article: "", word: "\u0938\u094d\u0915\u093e\u0930\u094d\u095e", gender: "m" },
-    apron: { article: "", word: "\u090f\u092a\u094d\u0930\u0928", gender: "m" },
-    bag: { article: "", word: "\u092c\u0948\u0917", gender: "m" },
-    umbrella: { article: "", word: "\u091b\u093e\u0924\u093e", gender: "m" },
-  },
-  colours: {
-    red: { "*": "\u0932\u093e\u0932" },
-    blue: { m: "\u0928\u0940\u0932\u093e", f: "\u0928\u0940\u0932\u0940" },
-    green: { m: "\u0939\u0930\u093e", f: "\u0939\u0930\u0940" },
-    yellow: { m: "\u092a\u0940\u0932\u093e", f: "\u092a\u0940\u0932\u0940" },
-    white: { "*": "\u0938\u095e\u0947\u0926" },
-    black: { m: "\u0915\u093e\u0932\u093e", f: "\u0915\u093e\u0932\u0940" },
-  },
-  does: {
-    baker: "\u0928\u093e\u0928\u092c\u093e\u0908 \u0930\u094b\u091f\u0940 \u092c\u0928\u093e\u0924\u093e \u0939\u0948\u0964",
-    butcher: "\u0915\u0938\u093e\u0908 \u092e\u093e\u0902\u0938 \u0915\u093e\u091f\u0924\u093e \u0939\u0948\u0964",
-    farmer: "\u0915\u093f\u0938\u093e\u0928 \u0916\u0947\u0924\u0940 \u0915\u0930\u0924\u093e \u0939\u0948\u0964",
-    fisher: "\u092e\u091b\u0941\u0906\u0930\u093e \u092e\u091b\u0932\u0940 \u092a\u0915\u0921\u093c\u0924\u093e \u0939\u0948\u0964",
-    nurse: "\u0928\u0930\u094d\u0938 \u092e\u0930\u0940\u095b\u094b\u0902 \u0915\u0940 \u0926\u0947\u0916\u092d\u093e\u0932 \u0915\u0930\u0924\u0940 \u0939\u0948\u0964",
-    painter: "\u091a\u093f\u0924\u094d\u0930\u0915\u093e\u0930 \u0924\u0938\u094d\u0935\u0940\u0930\u0947\u0902 \u092c\u0928\u093e\u0924\u093e \u0939\u0948\u0964",
-    sailor: "\u0928\u093e\u0935\u093f\u0915 \u091c\u0939\u093e\u095b \u091a\u0932\u093e\u0924\u093e \u0939\u0948\u0964",
-    teacher: "\u0936\u093f\u0915\u094d\u0937\u0915 \u092c\u091a\u094d\u091a\u094b\u0902 \u0915\u094b \u092a\u0922\u093c\u093e\u0924\u093e \u0939\u0948\u0964",
-  },
-  praise: "\u0936\u093e\u092c\u093e\u0936!", again: "\u092b\u093f\u0930 \u0938\u0947?", gloss: GLOSS,
-};
-
-export const LANGUAGES: readonly Lexicon[] = [SPANISH, FRENCH, HINDI];
+/** English and the two Indian languages first: those are the ones a classroom here will use. */
+export const LANGUAGES: readonly Lexicon[] = [ENGLISH, HINDI, KANNADA, SPANISH, FRENCH];

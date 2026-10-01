@@ -13,9 +13,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  CLAUSES, Hunt, SPANISH, aimConfig, angleDelta, buildScene, glossText, missedClauses,
+  CLAUSES, Hunt, SPANISH, aimConfig, angleDelta, buildScene, missedClauses,
   promptText, reachableMargin, sceneConfig, seededRandom, type Clause, type Combination,
-  JOBS, LANGUAGES, agree, doesText, HINDI,
+  JOBS, LANGUAGES, agree, doesText, HINDI, KANNADA, ENGLISH,
 } from "../rules/hunt.ts";
 
 const SEEDS = [1, 2, 7, 42, 1337, 20261001, 0xdeadbeef];
@@ -117,8 +117,42 @@ test("a missing word names the ids rather than printing a hole", () => {
   assert.match(text, /\[no words for astronaut\//);
 });
 
-test("the gloss reads as English in the prompt's order", () => {
-  assert.equal(glossText(SPANISH, { subject: "baker", trait: "umbrella", colour: "red" }), "the baker with the red umbrella");
+test("the hint is the same sentence in the language the learner already knows", () => {
+  // There is no gloss table any more: English is a lexicon like the others, so a learner who knows
+  // Kannada and is learning Hindi is served by exactly the same mechanism.
+  const combination = { subject: "baker", trait: "umbrella", colour: "red" };
+  assert.equal(promptText(ENGLISH, combination), "Find the baker with the red umbrella");
+  assert.notEqual(promptText(HINDI, combination), promptText(ENGLISH, combination));
+});
+
+test("a noun that inflects shows its citation form on the label and its case form in the sentence", () => {
+  // The picture is labelled with the word to remember, not the case-marked form this one sentence
+  // happens to need. Kannada glues the accusative to the noun, so no template can produce it.
+  const butcher = KANNADA.subjects.butcher;
+  assert.notEqual(butcher.inflected, undefined);
+  assert.notEqual(butcher.inflected, butcher.word);
+  const sentence = promptText(KANNADA, { subject: "butcher", trait: "shirt", colour: "red" });
+  assert.ok(sentence.includes(butcher.inflected), sentence);
+});
+
+test("Hindi agrees the oblique and the postposition, which it once got wrong twice", () => {
+  // "kaala chhaata vaale" was wrong on both counts: the oblique needs "kaale chhaate", and the
+  // postposition is "vaali" for a woman. Both are now data, so both are testable.
+  const masculine = promptText(HINDI, { subject: "baker", trait: "umbrella", colour: "black" });
+  assert.ok(masculine.includes(HINDI.colours.black?.["m.obl"] ?? "!"), masculine);
+  assert.ok(masculine.includes(HINDI.traits.umbrella?.inflected ?? "!"), masculine);
+  assert.ok(masculine.includes(HINDI.with.m ?? "!"), masculine);
+
+  const feminine = promptText(HINDI, { subject: "nurse", trait: "shirt", colour: "red" });
+  assert.ok(feminine.includes(HINDI.with.f ?? "!"), feminine);
+  assert.ok(!feminine.includes(" " + (HINDI.with.m ?? "!") + " "), feminine);
+});
+
+test("Kannada never inflects a colour, which is the contrast that makes agreement visible", () => {
+  for (const colour of JOBS.colours) {
+    const forms = new Set(Object.values(KANNADA.colours[colour] ?? {}));
+    assert.equal(forms.size, 1, `${colour} has more than one Kannada form`);
+  }
 });
 
 test("angleDelta takes the short way round the seam", () => {
@@ -377,6 +411,8 @@ test("every language has a word for everything the topic can name", () => {
         }
       }
       assert.ok(doesText(lexicon, subject).length > 0, `${lexicon.name}: nothing said about ${subject}`);
+      // A label showing a case-marked form teaches the wrong word to remember.
+      assert.ok((lexicon.subjects[subject]?.word ?? "").length > 0, `${lexicon.name}: ${subject} has no citation form`);
     }
     assert.ok(lexicon.praise.length > 0 && lexicon.again.length > 0, `${lexicon.name}: no praise or replay line`);
   }
