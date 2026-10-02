@@ -1,0 +1,25 @@
+{
+  "name": "ambospyglass-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AmboSpyglass: the AEP web renderer's sample for motion.orientation as a pointing instrument, teaching vocabulary through visual search.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --test tests/hunt.test.ts",
+    "check:art": "node tools/check_art.mjs"
+  },
+  "dependencies": {
+    "@ambokit/aep-core": "file:libs/ambokit-aep-core-0.9.0.tgz",
+    "@ambokit/aep-host": "file:libs/ambokit-aep-host-0.9.0.tgz",
+    "@ambokit/aep-web": "file:libs/ambokit-aep-web-0.9.0.tgz"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.ambokit.aep.ambospyglass",
+  "name": "AmboSpyglass",
+  "description": "Sweep the phone to move a lens over a crowded scene, find the person the sentence describes, and tap to claim them. The sentence is in the language being learned; the picture is the same in every language.",
+  "renderers": ["web"],
+  "requiresCalibration": false,
+  "capabilities": {
+    "required": ["motion.orientation", "input.touch"],
+    "optional": ["input.controller"]
+  },
+  "aep": { "minimumVersion": "0.9.0" }
+}

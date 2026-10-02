@@ -1,0 +1,7 @@
+{
+  "name": "ambospyglass-web",
+  "renderer": "web",
+  "aepVersion": "0.9.0",
+  "description": "A Find-Waldo in the language you are learning. The sample for motion.orientation as a pointing instrument: the phone's facing moves a magnifying lens over a crowd too dense to read, and a tap claims whoever is under the crosshair. The same scene plays in five languages.",
+  "experienceRules": "rules"
+}
